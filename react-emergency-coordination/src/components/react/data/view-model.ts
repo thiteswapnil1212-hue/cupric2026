@@ -92,6 +92,7 @@ export type DashboardViewModel = {
   validation: PlanValidationResult | null;
   humanDecision: HumanDecision | null;
   previousPlan: ResponsePlan | null;
+  approvalAvailable: boolean;
 };
 
 const agentLabels: Record<AgentType, string> = {
@@ -176,6 +177,9 @@ export function createDashboardViewModel(
   const { state, stateChanges } = snapshot;
   const agentRuns = runsForSnapshot(snapshot);
   const plan = state.activePlan;
+  const approvalAvailable = "stage" in snapshot
+    ? (snapshot.stage === "AWAITING_APPROVAL" || snapshot.stage === "AWAITING_REVISED_APPROVAL") && plan?.status === "PENDING_APPROVAL"
+    : plan?.status === "PENDING_APPROVAL";
   const changedRoute = state.routes.find((route) => route.status !== "OPEN");
   return {
     incident: state.incident,
@@ -234,5 +238,6 @@ export function createDashboardViewModel(
     validation: "validation" in snapshot ? snapshot.validation : null,
     humanDecision: "humanDecision" in snapshot ? snapshot.humanDecision : null,
     previousPlan: "previousPlan" in snapshot ? snapshot.previousPlan : null,
+    approvalAvailable,
   };
 }
