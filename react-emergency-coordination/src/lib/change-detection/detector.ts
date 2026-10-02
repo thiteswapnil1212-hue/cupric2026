@@ -153,7 +153,7 @@ function markImpacts(
     }
   }
 
-  const affected: AffectedDependency[] = [];
+  const affectedByEntity = new Map<string, AffectedDependency>();
   for (const change of changes) {
     let reason: string | null = null;
     if (change.entityType === "INCIDENT") {
@@ -196,14 +196,18 @@ function markImpacts(
 
     if (reason !== null) {
       change.operationalImpact = "REASSESSMENT_REQUIRED";
-      affected.push({
+      affectedByEntity.set(`${change.entityType}:${change.entityId}`, {
         entityType: change.entityType === "INCIDENT" ? "INCIDENT" : change.entityType,
         entityId: change.entityId,
         reason,
       });
     }
   }
-  return affected;
+  return [...affectedByEntity.values()].sort((left, right) =>
+    `${left.entityType}:${left.entityId}`.localeCompare(
+      `${right.entityType}:${right.entityId}`,
+    ),
+  );
 }
 
 export function detectEmergencyStateChanges(
