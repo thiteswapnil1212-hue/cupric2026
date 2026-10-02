@@ -15,6 +15,7 @@ type PlanActionDatabaseRow = {
   resource_ids: unknown;
   facility_ids: unknown;
   route_ids: unknown;
+  capacity_demand: number | null;
   target_latitude: number | null;
   target_longitude: number | null;
   estimated_duration_minutes: number;
@@ -56,6 +57,7 @@ function toPlanAction(row: PlanActionDatabaseRow): PlanAction {
     resourceIds: row.resource_ids,
     facilityIds: row.facility_ids,
     routeIds: row.route_ids,
+    capacityDemand: row.capacity_demand,
     targetLocation,
     estimatedDurationMinutes: row.estimated_duration_minutes,
     createdAt: row.created_at,
@@ -75,6 +77,7 @@ function toDatabaseInsert(action: PlanAction): PlanActionDatabaseInsert {
     resource_ids: action.resourceIds,
     facility_ids: action.facilityIds,
     route_ids: action.routeIds,
+    capacity_demand: action.capacityDemand ?? null,
     target_latitude: action.targetLocation?.latitude ?? null,
     target_longitude: action.targetLocation?.longitude ?? null,
     estimated_duration_minutes: action.estimatedDurationMinutes,
@@ -95,6 +98,9 @@ function toDatabaseUpdates(updates: PlanActionUpdates): PlanActionDatabaseUpdate
   if (updates.resourceIds !== undefined) row.resource_ids = updates.resourceIds;
   if (updates.facilityIds !== undefined) row.facility_ids = updates.facilityIds;
   if (updates.routeIds !== undefined) row.route_ids = updates.routeIds;
+  if (updates.capacityDemand !== undefined) {
+    row.capacity_demand = updates.capacityDemand;
+  }
   if (updates.targetLocation !== undefined) {
     row.target_latitude = updates.targetLocation?.latitude ?? null;
     row.target_longitude = updates.targetLocation?.longitude ?? null;
