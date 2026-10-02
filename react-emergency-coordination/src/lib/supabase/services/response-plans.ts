@@ -8,6 +8,7 @@ import { listPlanActionsForPlan } from "./plan-actions";
 
 type ResponsePlanDatabaseRow = {
   id: string;
+  domain_relations_complete: boolean;
   incident_id: string;
   state_version: number;
   status: ResponsePlan["status"];
@@ -100,6 +101,7 @@ function toDatabaseInsert(
 ): ResponsePlanDatabaseInsert {
   return {
     id: plan.id,
+    domain_relations_complete: false,
     incident_id: plan.incidentId,
     state_version: plan.stateVersion,
     status: plan.status,
@@ -190,6 +192,12 @@ async function listPlanRouteDependencies(
 async function toCompleteResponsePlan(
   row: ResponsePlanDatabaseRow,
 ): Promise<ResponsePlan> {
+  if (!row.domain_relations_complete) {
+    throw new Error(
+      `Response plan ${row.id} has not had its normalized alternatives and dependencies explicitly persisted.`,
+    );
+  }
+
   const [actions, alternatives, resourceDependencies, facilityDependencies, routeDependencies] =
     await Promise.all([
       listPlanActionsForPlan(row.id),
@@ -300,12 +308,45 @@ async function persistPlanRelations(
       .insert(routeDependencies);
     if (error) throw error;
   }
+
+  const { error } = await supabase
+    .from("response_plans")
+    .update({ domain_relations_complete: true })
+    .eq("id", planId);
+  if (error) throw error;
 }
 
 async function replacePlanRelations(
   planId: string,
   updates: Pick<ResponsePlanUpdates, "alternatives" | "dependencies">,
 ): Promise<void> {
+  const { data, error } = await supabase
+    .from("response_plans")
+    .select("domain_relations_complete")
+    .eq("id", planId)
+    .limit(1)
+    .overrideTypes<{ domain_relations_complete: boolean }[], { merge: false }>();
+
+  if (error) throw error;
+  const planRow = data[0];
+  if (planRow === undefined) {
+    throw new Error(`Response plan ${planId} was not found.`);
+  }
+  if (
+    !planRow.domain_relations_complete &&
+    (updates.alternatives === undefined || updates.dependencies === undefined)
+  ) {
+    throw new Error(
+      `Response plan ${planId} requires explicit alternatives and dependencies to repair incomplete persisted relations.`,
+    );
+  }
+
+  const { error: incompleteError } = await supabase
+    .from("response_plans")
+    .update({ domain_relations_complete: false })
+    .eq("id", planId);
+  if (incompleteError) throw incompleteError;
+
   if (updates.alternatives !== undefined) {
     const { error } = await supabase
       .from("response_plan_alternatives")
