@@ -1,5 +1,6 @@
 import { IncidentSchema, type Incident } from "../../../domain/incident/schema";
 import { supabase } from "../client";
+import { normalizeDatabaseTimestamp } from "./timestamps";
 
 type IncidentDatabaseRow = {
   id: string;
@@ -41,8 +42,8 @@ function toIncident(row: IncidentDatabaseRow): Incident {
     },
     affectedPopulation: row.affected_population,
     hazards: row.hazards,
-    reportedAt: row.reported_at,
-    updatedAt: row.updated_at,
+    reportedAt: normalizeDatabaseTimestamp(row.reported_at),
+    updatedAt: normalizeDatabaseTimestamp(row.updated_at),
   });
 }
 
