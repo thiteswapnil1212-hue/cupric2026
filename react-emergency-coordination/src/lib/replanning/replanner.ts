@@ -242,7 +242,7 @@ export async function replanEmergencyResponse(
     currentState,
     activePlan,
   });
-  if (!changeDetection.success) {
+  if (changeDetection.success === false) {
     return invalidResult(
       previousState,
       currentState,
@@ -289,7 +289,7 @@ export async function replanEmergencyResponse(
   }
 
   const pipeline = await runReactAgentPipeline(currentState, agents);
-  if (!pipeline.success) {
+  if (pipeline.success === false) {
     return baseResult(context, "FAILED", startedAt, startedAtMs, detectionStages, {
       reassessmentPerformed: true,
       riskAssessment: null,
