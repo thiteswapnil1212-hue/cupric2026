@@ -2,35 +2,21 @@ import "server-only";
 
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
+import {
+  GeminiError,
+  geminiRequestFailure,
+  parseStructuredJson,
+  requireGeminiApiKey,
+  type GeminiErrorCode,
+} from "./gemini-contract";
+
+export { GeminiError, parseStructuredJson };
+export type { GeminiErrorCode };
 
 const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
 const DEFAULT_TIMEOUT_MS = 25_000;
 const MAX_TIMEOUT_MS = 30_000;
 const MAX_INPUT_CHARACTERS = 100_000;
-
-export type GeminiErrorCode =
-  | "GEMINI_CONFIG_ERROR"
-  | "GEMINI_REQUEST_ERROR"
-  | "GEMINI_TIMEOUT"
-  | "GEMINI_EMPTY_RESPONSE"
-  | "GEMINI_INVALID_JSON"
-  | "GEMINI_SCHEMA_VALIDATION_FAILED";
-
-export class GeminiError extends Error {
-  readonly code: GeminiErrorCode;
-  readonly validationIssues: readonly string[] | undefined;
-
-  constructor(
-    code: GeminiErrorCode,
-    message: string,
-    validationIssues?: readonly string[],
-  ) {
-    super(message);
-    this.name = "GeminiError";
-    this.code = code;
-    this.validationIssues = validationIssues;
-  }
-}
 
 export type GeminiJsonInput =
   | string
@@ -133,56 +119,6 @@ export function serializeGeminiInput(input: GeminiJsonInput): string {
   return serialized;
 }
 
-function stripJsonFence(text: string): string {
-  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text.trim());
-  return match === null ? text.trim() : match[1].trim();
-}
-
-export function parseStructuredJson<T>(
-  responseText: string,
-  schema: z.ZodType<T>,
-): T {
-  if (responseText.trim().length === 0) {
-    throw new GeminiError(
-      "GEMINI_EMPTY_RESPONSE",
-      "Gemini returned an empty response.",
-    );
-  }
-
-  const jsonText = stripJsonFence(responseText);
-  if (jsonText.length === 0) {
-    throw new GeminiError(
-      "GEMINI_EMPTY_RESPONSE",
-      "Gemini returned an empty response.",
-    );
-  }
-
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(jsonText);
-  } catch {
-    throw new GeminiError(
-      "GEMINI_INVALID_JSON",
-      "Gemini returned malformed JSON.",
-    );
-  }
-
-  const validation = schema.safeParse(parsedJson);
-  if (!validation.success) {
-    const validationIssues = validation.error.issues.map((issue) => {
-      const path = issue.path.map(String).join(".") || "<root>";
-      return `${path}: ${issue.message}`;
-    });
-    throw new GeminiError(
-      "GEMINI_SCHEMA_VALIDATION_FAILED",
-      "Gemini JSON did not match the expected schema.",
-      validationIssues,
-    );
-  }
-
-  return validation.data;
-}
-
 function resolveTimeout(timeoutMs: number | undefined): number {
   const resolvedTimeout = timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (
@@ -198,25 +134,10 @@ function resolveTimeout(timeoutMs: number | undefined): number {
   return resolvedTimeout;
 }
 
-function isTimeoutError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return (
-    error.name === "RequestTimeoutError" ||
-    error.name === "TimeoutError" ||
-    error.name === "AbortError"
-  );
-}
-
 export async function generateStructuredJson<T>(
   options: GenerateStructuredJsonOptions<T>,
 ): Promise<T> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (apiKey === undefined || apiKey.trim().length === 0) {
-    throw new GeminiError(
-      "GEMINI_CONFIG_ERROR",
-      "GEMINI_API_KEY must be configured in the server environment.",
-    );
-  }
+  const apiKey = requireGeminiApiKey(process.env.GEMINI_API_KEY);
 
   if (options.systemInstruction.trim().length === 0) {
     throw new GeminiError(
@@ -253,16 +174,7 @@ export async function generateStructuredJson<T>(
     responseText = response.text;
   } catch (error) {
     if (error instanceof GeminiError) throw error;
-    if (isTimeoutError(error)) {
-      throw new GeminiError(
-        "GEMINI_TIMEOUT",
-        `Gemini request exceeded the ${timeoutMs}ms timeout.`,
-      );
-    }
-    throw new GeminiError(
-      "GEMINI_REQUEST_ERROR",
-      "Gemini request failed. No request details or credentials were logged or exposed.",
-    );
+    throw geminiRequestFailure(error, timeoutMs);
   }
 
   return parseStructuredJson(responseText ?? "", options.schema);
