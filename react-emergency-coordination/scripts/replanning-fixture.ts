@@ -12,6 +12,7 @@ import {
   type ReplanningAgents,
 } from "../src/lib/replanning/replanner";
 import {
+  replanAndPersistEmergencyResponse,
   persistReplanningResult,
   ReplanningPersistenceError,
   type ReplanningPersistenceDependencies,
@@ -392,6 +393,31 @@ async function main(): Promise<void> {
   assert.ok(persistenceWrites.includes(`plan:${successful.revisedPlan!.id}`));
   assert.ok(persistenceWrites.includes(`status:${oldPlan.id}:SUPERSEDED`));
   assert.ok(persistenceWrites.some((write) => write.startsWith("action:")));
+
+  const integratedWrites: string[] = [];
+  const integratedDependencies: ReplanningPersistenceDependencies = {
+    ...persistenceDependencies,
+    createPlan: async (plan) => { integratedWrites.push(`plan:${plan.id}`); },
+    createPlanAction: async (planAction) => {
+      integratedWrites.push(`action:${planAction.id}`);
+    },
+    updatePlan: async (planId, _expectedStatus, status) => {
+      integratedWrites.push(`status:${planId}:${status}`);
+      return { ...oldPlan, status };
+    },
+    createStateChange: async (stateChange) => {
+      integratedWrites.push(`change:${stateChange.id}`);
+    },
+  };
+  const integratedReplanning = await replanAndPersistEmergencyResponse(
+    previous,
+    current,
+    { activePlan: oldPlan, agents: agents([]) },
+    integratedDependencies,
+  );
+  assert.equal(integratedReplanning.status, "PENDING_HUMAN_APPROVAL");
+  assert.equal(integratedReplanning.previousPlanSupersessionPersisted, true);
+  assert.ok(integratedWrites.includes(`plan:${integratedReplanning.revisedPlan!.id}`));
 
   const stalePersistenceDependencies: ReplanningPersistenceDependencies = {
     ...persistenceDependencies,
