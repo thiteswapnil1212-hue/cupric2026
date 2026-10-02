@@ -232,6 +232,11 @@ function initialSnapshot(): DemoSnapshot {
     stateChanges: [],
     currentPlan: null,
     previousPlan: null,
+    riskAssessment: null,
+    resourceRoutingAssessment: null,
+    responsePlanningResult: null,
+    validation: null,
+    humanDecision: null,
     progress: { current: 0, total: 9, label: "Ready to start" },
     error: null,
   };
@@ -252,11 +257,14 @@ export class DemoController {
   async startDemo(): Promise<DemoOperationResult> {
     const fixture = getDemoState("initial");
     this.snapshot = { ...this.snapshot, stage: "EMERGENCY_INITIALIZED", state: fixture.state, agentRuns: fixture.agentRuns, stateChanges: [changeRecord("DEMO-001", "INCIDENT", fixture.state.incident.id, "CREATED", "Emergency detected", null, "ACTIVE", fixture.state.incident.reportedAt)], progress: { current: 1, total: 9, label: "Emergency initialized" }, error: null };
-    const generated = await deterministicAgents("PLAN-001").responsePlanning(fixture.state);
+    const agents = deterministicAgents("PLAN-001");
+    const riskAssessment = await agents.riskAssessment(fixture.state);
+    const resourceRoutingAssessment = await agents.resourceRouting(fixture.state);
+    const generated = await agents.responsePlanning(fixture.state);
     if (!generated.validation.valid) return this.fail("PLAN_GENERATED", "PLAN_VALIDATION_FAILED", generated.validation.errors.map((issue) => issue.message).join(" "));
     const submitted = submitPlanForApproval(generated.plan);
     if (!submitted.success) return this.fail("PLAN_GENERATED", submitted.error.code, submitted.error.message);
-    this.snapshot = { ...this.snapshot, stage: "AWAITING_APPROVAL", currentPlan: submitted.plan, state: { ...fixture.state, activePlan: submitted.plan }, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-002", "PLAN", submitted.plan.id, "CREATED", "Response Plan-001 generated", null, "PENDING_APPROVAL", demoTimes.initialPlan)], progress: { current: 2, total: 9, label: "Human authorization required" } };
+    this.snapshot = { ...this.snapshot, stage: "AWAITING_APPROVAL", currentPlan: submitted.plan, state: { ...fixture.state, activePlan: submitted.plan }, riskAssessment, resourceRoutingAssessment, responsePlanningResult: generated, validation: generated.validation, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-002", "PLAN", submitted.plan.id, "CREATED", "Response Plan-001 generated", null, "PENDING_APPROVAL", demoTimes.initialPlan)], progress: { current: 2, total: 9, label: "Human authorization required" } };
     return { success: true, snapshot: this.snapshot };
   }
 
@@ -266,7 +274,7 @@ export class DemoController {
     const approved = approvePlan(plan, { ...decisionMetadata(plan, "Coordinator approved deterministic demo plan."), currentState: this.snapshot.state });
     if (!approved.success) return this.fail(this.snapshot.stage, approved.error.code, approved.error.message);
     const executingStage: DemoStage = plan.id === "PLAN-001" ? "EXECUTING" : "EXECUTING_REVISED_PLAN";
-    this.snapshot = { ...this.snapshot, stage: executingStage, state: { ...this.snapshot.state, activePlan: approved.plan }, currentPlan: approved.plan, progress: { current: plan.id === "PLAN-001" ? 3 : 8, total: 9, label: "Simulated execution in progress" } };
+    this.snapshot = { ...this.snapshot, stage: executingStage, state: { ...this.snapshot.state, activePlan: approved.plan }, currentPlan: approved.plan, humanDecision: approved.decision ?? null, progress: { current: plan.id === "PLAN-001" ? 3 : 8, total: 9, label: "Simulated execution in progress" } };
     const executed = executeApprovedPlan(this.snapshot.state, approved.plan);
     if (!executed.success) return this.fail(executingStage, executed.error.code, executed.error.message);
     const executionChanges = executed.stateChanges;
@@ -279,7 +287,7 @@ export class DemoController {
     if (plan === null || (this.snapshot.stage !== "AWAITING_APPROVAL" && this.snapshot.stage !== "AWAITING_REVISED_APPROVAL")) return this.fail(this.snapshot.stage, "INVALID_TRANSITION", "Rejection is only allowed when a plan is awaiting human approval.");
     const rejected = rejectPlan(plan, { ...decisionMetadata(plan, reason), reason, currentState: this.snapshot.state });
     if (!rejected.success) return this.fail(this.snapshot.stage, rejected.error.code, rejected.error.message);
-    this.snapshot = { ...this.snapshot, stage: "FAILED", currentPlan: rejected.plan, state: { ...this.snapshot.state, activePlan: rejected.plan }, progress: { ...this.snapshot.progress, label: "Plan rejected · reset required" }, error: null };
+    this.snapshot = { ...this.snapshot, stage: "FAILED", currentPlan: rejected.plan, state: { ...this.snapshot.state, activePlan: rejected.plan }, humanDecision: rejected.decision ?? null, progress: { ...this.snapshot.progress, label: "Plan rejected · reset required" }, error: null };
     return { success: true, snapshot: this.snapshot };
   }
 
@@ -303,12 +311,14 @@ export class DemoController {
     if (detection.success === false) return this.fail("CHANGE_DETECTED", "CHANGE_DETECTION_FAILED", detection.error.message);
     if (detection.classification !== "PLAN_AFFECTED_REASSESSMENT_REQUIRED") return this.fail("CHANGE_DETECTED", "UNEXPECTED_CHANGE_CLASSIFICATION", detection.reason);
     this.snapshot = { ...this.snapshot, stage: "REASSESSING", progress: { current: 6, total: 9, label: "Plan dependency affected · reassessing" } };
-    const generatedActions = this.revisedActions(currentState);
-    const revised = createPlanResult(currentState, "PLAN-002", generatedActions, "Adapt response through the R2 alternative route.", "Deterministic demo reassessment selected the open alternative route.");
+    const agents = deterministicAgents("PLAN-002");
+    const riskAssessment = await agents.riskAssessment(currentState);
+    const resourceRoutingAssessment = await agents.resourceRouting(currentState);
+    const revised = await agents.responsePlanning(currentState);
     if (!revised.validation.valid) return this.fail("REASSESSING", "PLAN_VALIDATION_FAILED", revised.validation.errors.map((issue) => issue.message).join(" "));
     const revisedPlan = submitPlanForApproval(revised.plan);
     if (!revisedPlan.success) return this.fail("REASSESSING", revisedPlan.error.code, revisedPlan.error.message);
-    this.snapshot = { ...this.snapshot, stage: "AWAITING_REVISED_APPROVAL", state: { ...currentState, planActions: [...currentState.planActions, ...generatedActions], activePlan: revisedPlan.plan }, currentPlan: revisedPlan.plan, previousPlan: this.snapshot.currentPlan, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-PLAN-002", "PLAN", revisedPlan.plan.id, "CREATED", "Response Plan-002 generated", null, "PENDING_APPROVAL", demoTimes.revisedPlan)], progress: { current: 7, total: 9, label: "Revised plan ready · human authorization required" }, error: null };
+    this.snapshot = { ...this.snapshot, stage: "AWAITING_REVISED_APPROVAL", state: { ...currentState, planActions: [...currentState.planActions, ...revised.actions], activePlan: revisedPlan.plan }, currentPlan: revisedPlan.plan, previousPlan: this.snapshot.currentPlan, riskAssessment, resourceRoutingAssessment, responsePlanningResult: revised, validation: revised.validation, humanDecision: null, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-PLAN-002", "PLAN", revisedPlan.plan.id, "CREATED", "Response Plan-002 generated", null, "PENDING_APPROVAL", demoTimes.revisedPlan)], progress: { current: 7, total: 9, label: "Revised plan ready · human authorization required" }, error: null };
     return { success: true, snapshot: this.snapshot };
   }
 

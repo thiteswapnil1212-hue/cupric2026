@@ -1,8 +1,13 @@
 import { z } from "zod";
 import type { AgentRun } from "../../domain/agent-run/schema";
 import type { EmergencyState } from "../../domain/emergency-state/schema";
+import type { HumanDecision } from "../../domain/human-decision/schema";
 import type { ResponsePlan } from "../../domain/response-plan/schema";
 import type { StateChange } from "../../domain/state-change/schema";
+import type { ResourceRoutingAssessment } from "../agents/resource-routing/schema";
+import type { RiskAssessment } from "../agents/risk-assessment/schema";
+import type { ResponsePlanningResult } from "../agents/response-planning/types";
+import type { PlanValidationResult } from "../emergency-engine/plan-validator";
 
 export const DemoStageSchema = z.enum([
   "IDLE",
@@ -37,6 +42,11 @@ export type DemoSnapshot = {
   readonly stateChanges: readonly StateChange[];
   readonly currentPlan: ResponsePlan | null;
   readonly previousPlan: ResponsePlan | null;
+  readonly riskAssessment: RiskAssessment | null;
+  readonly resourceRoutingAssessment: ResourceRoutingAssessment | null;
+  readonly responsePlanningResult: ResponsePlanningResult | null;
+  readonly validation: PlanValidationResult | null;
+  readonly humanDecision: HumanDecision | null;
   readonly progress: {
     readonly current: number;
     readonly total: number;
