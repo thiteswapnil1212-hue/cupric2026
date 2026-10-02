@@ -58,6 +58,7 @@ export type EmergencyStateProviderDependencies = {
 
 export interface EmergencyStateProvider {
   getPlan(planId: string): Promise<ResponsePlan | null>;
+  getStateForIncident(incidentId: string): Promise<EmergencyState>;
   getStateForPlan(
     plan: ResponsePlan,
   ): Promise<EmergencyStateProviderContext | null>;
@@ -210,6 +211,14 @@ export function createSupabaseEmergencyStateProvider(
         return await (await getDependencies()).getPlan(planId);
       } catch (error) {
         throw toProviderError(error, "load-plan", dependencies === undefined);
+      }
+    },
+
+    async getStateForIncident(incidentId) {
+      try {
+        return await (await getDependencies()).loadState(incidentId);
+      } catch (error) {
+        throw toProviderError(error, "load-state", dependencies === undefined);
       }
     },
 
