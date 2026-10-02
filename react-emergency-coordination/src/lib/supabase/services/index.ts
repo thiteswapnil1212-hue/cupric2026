@@ -34,6 +34,7 @@ export {
   getActiveResponsePlanForIncident,
   getResponsePlanById,
   listResponsePlansForIncident,
+  transitionResponsePlan,
   updateResponsePlan,
 } from "./response-plans";
 export type {
