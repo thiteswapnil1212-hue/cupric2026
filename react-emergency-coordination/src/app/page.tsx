@@ -2,9 +2,8 @@
 
 import { useMemo, useState } from "react";
 import {
-  Activity, AlertTriangle, Bell, Check, ChevronRight, CircleDot, Clock3,
-  Crosshair, Hospital, MapPin, Menu, MoreHorizontal, Route,
-  Users, X,
+  Activity, AlertTriangle, Bell, Check, CircleDot, Clock3, Crosshair,
+  Hospital, MapPin, Route, Users, X,
 } from "lucide-react";
 import {
   createDashboardViewModel,
@@ -23,8 +22,8 @@ function StatusDot({ tone = "green" }: { tone?: StatusTone }) {
   return <span className={`status-dot status-${tone}`} aria-hidden="true" />;
 }
 
-function PanelHeading({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: string }) {
-  return <div className="panel-heading"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2>{title}</h2></div>{action && <button className="text-button">{action}<ChevronRight size={14} /></button>}</div>;
+function PanelHeading({ eyebrow, title }: { eyebrow?: string; title: string }) {
+  return <div className="panel-heading"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2>{title}</h2></div></div>;
 }
 
 function formatTime(value: string): string {
@@ -45,6 +44,18 @@ function agentRows(agents: DashboardAgent[]) {
 
 function timelineRows(items: DashboardTimelineItem[]) {
   return items.map((item) => <div className="timeline-item" key={item.id}><time>{item.timeLabel}</time><span className={`timeline-marker marker-${item.tone}`} /><div><strong>{item.title}</strong><span>{item.detail}</span></div></div>);
+}
+
+function PlanHistory({ plans }: { plans: DemoSnapshot["planHistory"] }) {
+  if (plans.length === 0) return null;
+  return <details className="plan-history">
+    <summary>Plan history ({plans.length})</summary>
+    <ol>{[...plans].reverse().map((historyPlan) => <li key={`${historyPlan.id}-${historyPlan.updatedAt}`}>
+      <strong>{historyPlan.id}</strong>
+      <span className={`status-badge badge-${historyPlan.status === "COMPLETED" || historyPlan.status === "APPROVED" ? "green" : historyPlan.status === "PENDING_APPROVAL" ? "amber" : historyPlan.status === "REJECTED" ? "red" : "gray"}`}>{historyPlan.status.replaceAll("_", " ")}</span>
+      <time>{formatTime(historyPlan.updatedAt)}</time>
+    </li>)}</ol>
+  </details>;
 }
 
 function mapRouteClass(route: DashboardRoute): string {
@@ -68,10 +79,13 @@ function ExplainabilityPanel({ model }: { model: DashboardViewModel }) {
   </section>;
 }
 
-function Dashboard({ model, snapshot, busy, onStart, onApprove, onModify, onReject, onBlock, onReset }: { model: DashboardViewModel; snapshot: DemoSnapshot; busy: boolean; onStart: () => void; onApprove: () => void; onModify: () => void; onReject: () => void; onBlock: () => void; onReset: () => void }) {
+function Dashboard({ model, snapshot, busy, onStart, onApprove, onModify, onReject, onExecute, onBlock, onReset }: { model: DashboardViewModel; snapshot: DemoSnapshot; busy: boolean; onStart: () => void; onApprove: () => void; onModify: (reason?: string) => void; onReject: (reason: string) => void; onExecute: () => void; onBlock: () => void; onReset: () => void }) {
   const [rejectReason, setRejectReason] = useState("");
+  const [dismissedAlertRoute, setDismissedAlertRoute] = useState<string | null>(null);
   const plan = model.activePlan;
   const approvalAvailable = (snapshot.stage === "AWAITING_APPROVAL" || snapshot.stage === "AWAITING_REVISED_APPROVAL") && plan?.status === "PENDING_APPROVAL";
+  const executionAvailable = snapshot.stage === "AWAITING_EXECUTION" && plan?.status === "APPROVED";
+  const alertVisible = model.reassessment.required && model.reassessment.routeId !== dismissedAlertRoute;
   const routeCount = model.routes.filter((route) => route.status !== "OPEN").length;
   const activeResources = model.resources.filter((resource) => resource.status !== "UNAVAILABLE" && resource.status !== "OUT_OF_SERVICE").length;
   const availableFacilities = model.facilities.filter((facility) => facility.status === "OPERATIONAL" || facility.status === "LIMITED").length;
@@ -88,18 +102,18 @@ function Dashboard({ model, snapshot, busy, onStart, onApprove, onModify, onReje
       <div className="sidebar-footer"><div className="system-health"><StatusDot /><span>All systems operational</span></div><span className="build-label">Environment · Deterministic demo</span></div>
     </aside>
     <div className="main-column">
-      <header className="topbar"><div className="mobile-menu"><Menu size={18} /></div><div className="incident-context"><span className="context-label">CURRENT INCIDENT</span><strong>{model.incident.title}</strong><span className="incident-id">{model.incident.id}</span></div><div className="topbar-meta"><div className="topbar-state"><StatusDot /><span>System status</span><strong>Operational</strong></div><div className="topbar-divider" /><div className="topbar-updated">Last updated <strong>{formatTime(model.updatedAt)}</strong></div><button className="icon-button" aria-label="Notifications"><Bell size={17} /></button><button className="user-control"><span className="avatar">JM</span><span className="user-name">Jordan Miller</span><ChevronRight size={14} /></button></div></header>
+      <header className="topbar"><div className="incident-context"><span className="context-label">CURRENT INCIDENT</span><strong>{model.incident.title}</strong><span className="incident-id">{model.incident.id}</span></div><div className="topbar-meta"><div className="topbar-state"><StatusDot /><span>System status</span><strong>Operational</strong></div><div className="topbar-divider" /><div className="topbar-updated">Last updated <strong>{formatTime(model.updatedAt)}</strong></div><div className="user-control"><span className="avatar" aria-hidden="true">JM</span><span className="user-name">Jordan Miller</span></div></div></header>
       <main className="dashboard" id="overview">
-        <div className="page-header"><div><p className="eyebrow">OPERATIONS OVERVIEW</p><h1>Emergency coordination</h1></div><div className="header-actions"><span className="live-indicator"><StatusDot />{snapshot.progress.label}</span><div className="demo-switch">{snapshot.stage === "IDLE" ? <button className="demo-active" onClick={onStart} disabled={busy}>Start demo</button> : <button onClick={onReset} disabled={busy}>Reset demo</button>}{snapshot.stage === "COMPLETED" && snapshot.currentPlan?.id === "PLAN-001" && <button onClick={onBlock} disabled={busy}>Simulate R1 blockage</button>}</div><button className="outline-button"><MoreHorizontal size={15} />More actions</button></div></div>
+        <div className="page-header"><div><p className="eyebrow">OPERATIONS OVERVIEW</p><h1>Emergency coordination</h1></div><div className="header-actions"><span className="live-indicator" role="status" aria-live="polite"><StatusDot />{snapshot.progress.label}</span>        <div className="demo-switch">{snapshot.stage === "IDLE" ? <button className="demo-active" onClick={onStart} disabled={busy}>Start demo</button> : <button onClick={() => { setDismissedAlertRoute(null); onReset(); }} disabled={busy}>Reset demo</button>}{snapshot.stage === "COMPLETED" && snapshot.currentPlan?.id === "PLAN-001" && <button onClick={onBlock} disabled={busy}>Simulate R1 blockage</button>}</div></div></div>
         <section className="summary-strip" aria-label="Emergency summary"><div className="summary-cell summary-incident"><span className="summary-label">Incident</span><strong>{model.incident.title}</strong><small>{model.incident.location.address}</small></div><div className="summary-cell"><span className="summary-label">Status</span><strong className="value-critical"><StatusDot tone="red" />{model.incident.status} emergency</strong></div><div className="summary-cell"><span className="summary-label">Severity</span><strong className="value-critical">{model.incident.severity}</strong><small>Immediate response</small></div><div className="summary-cell"><span className="summary-label">Affected</span><strong>{model.incident.affectedPopulation} people</strong><small>Current incident estimate</small></div><div className="summary-cell"><span className="summary-label">State version</span><strong>v{model.stateVersion}</strong><small>Updated {formatTime(model.updatedAt)}</small></div></section>
         {snapshot.error && <div className="operational-failure" role="alert"><strong>{snapshot.error.code}</strong><span>{snapshot.error.message}</span><small>Stage: {snapshot.error.stage} · Reset required</small></div>}
-        {model.reassessment.required && <div className="reassessment-alert"><div className="alert-icon"><AlertTriangle size={17} /></div><div className="alert-copy"><strong>Plan reassessment required</strong><span>{model.reassessment.routeId} is blocked and affects the active response plan.</span></div><div className="alert-detail"><span>Affected dependency</span><strong>{model.reassessment.routeId}</strong></div><div className="alert-detail"><span>Revised plan</span><strong>{model.reassessment.revisedPlanId}</strong></div><button className="alert-dismiss" aria-label="Dismiss alert"><X size={16} /></button></div>}
+        {alertVisible && <div className="reassessment-alert" role="alert"><div className="alert-icon"><AlertTriangle size={17} /></div><div className="alert-copy"><strong>Plan reassessment required</strong><span>{model.reassessment.routeId} is blocked and affects the active response plan.</span></div><div className="alert-detail"><span>Affected dependency</span><strong>{model.reassessment.routeId}</strong></div><div className="alert-detail"><span>Revised plan</span><strong>{model.reassessment.revisedPlanId}</strong></div><button className="alert-dismiss" aria-label="Dismiss reassessment notice" onClick={() => setDismissedAlertRoute(model.reassessment.routeId)}><X size={16} /></button></div>}
         <div className="primary-grid">
-          <section className="panel map-panel" id="map"><PanelHeading eyebrow="SITUATIONAL AWARENESS" title="Live operational map" action="Expand map" /><div className="map-canvas"><div className="map-grid-lines" /><div className="map-road road-a" /><div className="map-road road-b" /><div className="map-road road-c" />{model.routes.map((route, index) => <div className={`map-route ${mapRouteClass(route)} map-route-${index}`} key={route.id}><span>{route.id}{route.status !== "OPEN" ? ` · ${route.status}` : ""}</span></div>)}<div className="map-marker marker-incident"><AlertTriangle size={12} /><span>Incident</span></div>{model.resources.slice(0, 2).map((resource, index) => <div className={`map-marker marker-resource-${index}`} key={resource.id}><Users size={12} /><span>{resource.name}</span></div>)}{model.facilities.map((facility, index) => <div className={`map-marker marker-facility-${index}`} key={facility.id}><Hospital size={12} /><span>{facility.name}</span></div>)}<div className="map-legend"><span><i className="legend-line active-line" />Open route</span><span><i className="legend-line blocked-line" />Blocked route</span></div><div className="map-scale">500 m</div></div><div className="map-footer"><span><StatusDot tone="red" />{routeCount} blocked routes</span><span><StatusDot />{activeResources} resources active</span><span><StatusDot tone="blue" />{availableFacilities} facilities available</span><button className="text-button">View map details <ChevronRight size={14} /></button></div></section>
-          <section className="panel plan-panel" id="plans"><PanelHeading eyebrow="ACTIVE RESPONSE PLAN" title={plan?.id ?? "No active plan"} action="Plan history" />{plan && <><div className="plan-meta"><span>Incident {plan.incidentId}</span><span className="meta-separator">•</span><span>Generated {formatTime(plan.generatedAt)}</span><span className="meta-separator">•</span><span>State version {plan.stateVersion}</span><span className="meta-separator">•</span><span>Routes {plan.dependencies.routeIds.join(", ")}</span><span className="plan-status status-badge badge-approved"><StatusDot tone={plan.status === "PENDING_APPROVAL" ? "amber" : "green"} />{plan.status}</span></div><div className="plan-callout"><div className="callout-icon"><AlertTriangle size={15} /></div><div><strong>{model.reassessment.required ? "Dependency affected" : "AI recommendation ready"}</strong><span>{model.reassessment.required ? `${model.reassessment.routeId} is no longer usable. Review the revised plan.` : plan.summary}</span></div></div><div className="plan-actions">{model.actions.map((action) => <div className="plan-action" key={action.id}><span className="action-index">{action.sequenceLabel}</span><span>{action.description}</span>{action.routeIds.some((routeId: string) => model.routes.find((route) => route.id === routeId)?.status !== "OPEN") ? <span className="action-warning">Blocked</span> : <StatusDot />}</div>)}</div><div className="plan-divider" /><div className="plan-origin"><span className="ai-tag">AI RECOMMENDATION</span><span>{plan.rationale}</span></div><div className="human-decision"><div><span className="eyebrow">HUMAN AUTHORIZATION</span>          <p>{snapshot.progress.label}</p>{approvalAvailable && <input className="decision-reason" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Reason for rejection or modification (optional)" />}</div><div className="decision-buttons">          <button className="button-approve" disabled={busy || !approvalAvailable} onClick={onApprove}>{busy ? "Executing…" : <><Check size={14} />Approve</>}</button>                    <button className="button-modify" disabled={busy || !approvalAvailable} onClick={onModify}>Modify</button><button className="button-reject" disabled={busy || !approvalAvailable} onClick={onReject}>Reject</button></div>          </div></>}</section>
+          <section className="panel map-panel" id="map"><PanelHeading eyebrow="SITUATIONAL AWARENESS" title="Operational map" /><div className="map-canvas" role="img" aria-label={`Schematic, not-to-scale incident map. ${model.routes.map((route) => `${route.id} ${route.statusLabel}`).join(", ")}. ${model.resources.slice(0, 2).map((resource) => resource.name).join(", ")}. ${model.facilities.map((facility) => facility.name).join(", ")}.`}><div className="map-grid-lines" /><div className="map-road road-a" /><div className="map-road road-b" /><div className="map-road road-c" />{model.routes.map((route, index) => <div className={`map-route ${mapRouteClass(route)} map-route-${index}`} key={route.id}><span>{route.id}{route.status !== "OPEN" ? ` · ${route.status}` : ""}</span></div>)}<div className="map-marker marker-incident"><AlertTriangle size={12} /><span>Incident</span></div>{model.resources.slice(0, 2).map((resource, index) => <div className={`map-marker marker-resource-${index}`} key={resource.id}><Users size={12} /><span>{resource.name}</span></div>)}{model.facilities.map((facility, index) => <div className={`map-marker marker-facility-${index}`} key={facility.id}><Hospital size={12} /><span>{facility.name}</span></div>)}<div className="map-legend"><span><i className="legend-line active-line" />Open route</span><span><i className="legend-line blocked-line" />Blocked route</span></div><div className="map-scale">500 m · schematic</div></div><div className="map-footer"><span><StatusDot tone="red" />{routeCount} blocked routes</span><span><StatusDot />{activeResources} resources active</span><span><StatusDot tone="blue" />{availableFacilities} facilities available</span></div></section>
+          <section className="panel plan-panel" id="plans"><PanelHeading eyebrow="ACTIVE RESPONSE PLAN" title={plan?.id ?? "No active plan"} />{snapshot.planHistory.length > 0 && <PlanHistory plans={snapshot.planHistory} />}{plan && <><div className="plan-meta"><span>Incident {plan.incidentId}</span><span className="meta-separator">•</span><span>Generated {formatTime(plan.generatedAt)}</span><span className="meta-separator">•</span><span>State version {plan.stateVersion}</span><span className="meta-separator">•</span><span>Routes {plan.dependencies.routeIds.join(", ")}</span><span className={`plan-status status-badge badge-${plan.status === "PENDING_APPROVAL" ? "amber" : plan.status === "APPROVED" ? "green" : plan.status === "COMPLETED" ? "blue" : plan.status === "REJECTED" ? "red" : "gray"}`}><StatusDot tone={plan.status === "PENDING_APPROVAL" ? "amber" : plan.status === "REJECTED" ? "red" : "green"} />{plan.status.replaceAll("_", " ")}</span></div><div className="plan-callout"><div className="callout-icon"><AlertTriangle size={15} /></div><div><strong>{model.reassessment.required ? "Dependency affected" : "AI recommendation ready"}</strong><span>{model.reassessment.required ? `${model.reassessment.routeId} is no longer usable. Review the revised plan.` : plan.summary}</span></div></div><div className="plan-actions">{model.actions.map((action) => <div className="plan-action" key={action.id}><span className="action-index">{action.sequenceLabel}</span><span>{action.description}</span>{action.routeIds.some((routeId: string) => model.routes.find((route) => route.id === routeId)?.status !== "OPEN") ? <span className="action-warning">Blocked</span> : <StatusDot />}</div>)}</div><div className="plan-divider" /><div className="plan-origin"><span className="ai-tag">AI RECOMMENDATION</span><span>{plan.rationale}</span></div><div className="human-decision"><div><span className="eyebrow">{approvalAvailable ? "HUMAN AUTHORIZATION" : model.humanDecision?.decision === "APPROVE" ? "HUMAN APPROVED" : "WORKFLOW STATUS"}</span><p>{snapshot.progress.label}</p>{approvalAvailable && <input className="decision-reason" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Reason for rejection or modification (optional)" aria-label="Reason for rejection or modification" />}</div><div className="decision-buttons">{approvalAvailable && <><button className="button-approve" disabled={busy} onClick={onApprove}>{busy ? "Approving…" : <><Check size={14} />Approve plan</>}</button><button className="button-modify" disabled={busy} onClick={() => onModify(rejectReason || "Coordinator requested a plan modification.")}>Modify</button><button className="button-reject" disabled={busy} onClick={() => onReject(rejectReason || "Coordinator rejected the deterministic demo plan.")}>Reject</button></>}{(executionAvailable || snapshot.stage === "EXECUTING" || snapshot.stage === "EXECUTING_REVISED_PLAN") && <button className="button-approve" disabled={busy || !executionAvailable} onClick={onExecute}>{busy || snapshot.stage.startsWith("EXECUTING") ? "Executing…" : "Execute plan"}</button>}</div></div></>}</section>
         </div>
-        <div className="secondary-grid"><section className="panel table-panel" id="resources"><PanelHeading eyebrow="FIELD OPERATIONS" title="Resource status" action="View all resources" /><div className="data-table"><div className="table-row table-head"><span>Resource</span><span>Type</span><span>Status</span><span>Assignment</span><span>Location</span></div>{resourceRows(model.resources)}</div></section><section className="panel facilities-panel" id="facilities"><PanelHeading eyebrow="CARE CAPACITY" title="Facilities" action="View all" /><div className="facility-list">{facilityRows(model.facilities)}</div></section></div>
-        <div className="bottom-grid"><section className="panel activity-panel" id="activity"><PanelHeading eyebrow="PROCESSING ACTIVITY" title="Agent activity" /><div className="agent-list">{agentRows(model.agents)}</div><div className="ai-note"><CircleDot size={13} />AI analyzes and recommends. Human coordinators authorize execution.</div></section><section className="panel timeline-panel" id="timeline"><PanelHeading eyebrow="AUDIT TRAIL" title="Situation timeline" action="View full history" /><div className="timeline-list">{timelineRows(model.timeline)}</div></section></div>
+        <div className="secondary-grid"><section className="panel table-panel" id="resources"><PanelHeading eyebrow="FIELD OPERATIONS" title="Resource status" /><div className="data-table"><div className="table-row table-head"><span>Resource</span><span>Type</span><span>Status</span><span>Assignment</span><span>Location</span></div>{resourceRows(model.resources)}</div></section><section className="panel facilities-panel" id="facilities"><PanelHeading eyebrow="CARE CAPACITY" title="Facilities" /><div className="facility-list">{facilityRows(model.facilities)}</div></section></div>
+        <div className="bottom-grid"><section className="panel activity-panel" id="activity"><PanelHeading eyebrow="PROCESSING ACTIVITY" title="Agent activity" /><div className="agent-list">{agentRows(model.agents)}</div><div className="ai-note"><CircleDot size={13} />AI analyzes and recommends. Human coordinators authorize execution.</div></section><section className="panel timeline-panel" id="timeline"><PanelHeading eyebrow="AUDIT TRAIL" title="Situation timeline" /><div className="timeline-list">{timelineRows(model.timeline)}</div></section></div>
         <ExplainabilityPanel model={model} />
       </main>
       <footer className="app-footer"><span>REACT Emergency Coordination · Deterministic demo environment</span><span>State version {model.stateVersion} <span className="footer-divider">|</span> {model.incident.id}</span></footer>
@@ -112,16 +126,24 @@ export default function Home() {
  const [snapshot, setSnapshot] = useState<DemoSnapshot>(() => controller.getSnapshot());
  const [busy, setBusy] = useState(false);
  const model = useMemo(() => createDashboardViewModel(snapshot), [snapshot]);
- async function run(operation: () => Promise<DemoOperationResult> | DemoOperationResult) {
+ async function run(operation: () => Promise<DemoOperationResult> | DemoOperationResult): Promise<boolean> {
    setBusy(true);
    try {
      const result = await operation();
      setSnapshot(result.snapshot);
+     return result.success;
    } catch (error) {
      setSnapshot(controller.captureUnexpectedFailure(error).snapshot);
+     return false;
    } finally {
      setBusy(false);
    }
+ }
+ async function execute() {
+   const started = await run(() => controller.beginExecution());
+   if (!started) return;
+   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+   await run(() => controller.completeExecution());
  }
  return <Dashboard
    model={model}
@@ -129,8 +151,9 @@ export default function Home() {
    busy={busy}
    onStart={() => void run(() => controller.startDemo())}
    onApprove={() => void run(() => controller.approveCurrentPlan())}
-   onModify={() => void run(() => controller.modifyCurrentPlan())}
-   onReject={() => void run(() => controller.rejectCurrentPlan("Coordinator rejected the deterministic demo plan."))}
+   onModify={(reason) => void run(() => controller.modifyCurrentPlan(reason || "Coordinator requested a plan modification."))}
+   onReject={(reason) => void run(() => controller.rejectCurrentPlan(reason || "Coordinator rejected the deterministic demo plan."))}
+   onExecute={() => void execute()}
    onBlock={() => void run(() => controller.simulateRouteBlockage())}
    onReset={() => void run(() => controller.resetDemo())}
  />;
