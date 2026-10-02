@@ -141,6 +141,7 @@ async function run(): Promise<void> {
   );
 
   const provider = createSupabaseEmergencyStateProvider(providerDependencies());
+  assert.deepEqual(await provider.getStateForIncident(state.incident.id), state);
   const plan = await provider.getPlan(state.activePlan!.id);
   assert.deepEqual(plan, state.activePlan);
   const context = await provider.getStateForPlan(plan!);
@@ -170,6 +171,12 @@ async function run(): Promise<void> {
   );
   await assert.rejects(
     unavailableProvider.getStateForPlan(state.activePlan!),
+    (error: unknown) =>
+      error instanceof EmergencyStateProviderError &&
+      error.code === "DATABASE_UNAVAILABLE",
+  );
+  await assert.rejects(
+    unavailableProvider.getStateForIncident(state.incident.id),
     (error: unknown) =>
       error instanceof EmergencyStateProviderError &&
       error.code === "DATABASE_UNAVAILABLE",
