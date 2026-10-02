@@ -12,6 +12,15 @@ async function run(): Promise<void> {
 
   const approved = await first.approveCurrentPlan();
   assert.equal(approved.success, true);
+  assert.equal(first.getSnapshot().stage, "AWAITING_EXECUTION");
+  assert.equal(first.getSnapshot().currentPlan?.status, "APPROVED");
+  assert.equal(first.getSnapshot().state.resources.some((resource) => resource.status === "DISPATCHED"), false);
+
+  const executionStarted = first.beginExecution();
+  assert.equal(executionStarted.success, true);
+  assert.equal(first.getSnapshot().stage, "EXECUTING");
+  const executed = first.completeExecution();
+  assert.equal(executed.success, true);
   assert.equal(first.getSnapshot().stage, "COMPLETED");
   assert.equal(first.getSnapshot().currentPlan?.status, "COMPLETED");
   const completedPlan = first.getSnapshot().currentPlan;
@@ -26,6 +35,12 @@ async function run(): Promise<void> {
 
   const revised = await first.approveCurrentPlan();
   assert.equal(revised.success, true);
+  assert.equal(first.getSnapshot().stage, "AWAITING_EXECUTION");
+  assert.equal(first.getSnapshot().currentPlan?.status, "APPROVED");
+  assert.equal(first.getSnapshot().state.routes.find((route) => route.id === "R1")?.status, "BLOCKED");
+  assert.equal(first.beginExecution().success, true);
+  assert.equal(first.getSnapshot().stage, "EXECUTING_REVISED_PLAN");
+  assert.equal(first.completeExecution().success, true);
   assert.equal(first.getSnapshot().stage, "COMPLETED");
   assert.equal(first.getSnapshot().currentPlan?.status, "COMPLETED");
   assert.equal(first.getSnapshot().state.routes.find((route) => route.id === "R1")?.status, "BLOCKED");
@@ -38,11 +53,15 @@ async function run(): Promise<void> {
   const repeat = createDemoController();
   await repeat.startDemo();
   await repeat.approveCurrentPlan();
+  repeat.beginExecution();
+  repeat.completeExecution();
   await repeat.simulateRouteBlockage();
   const repeatSnapshot = repeat.getSnapshot();
   const replay = createDemoController();
   await replay.startDemo();
   await replay.approveCurrentPlan();
+  replay.beginExecution();
+  replay.completeExecution();
   await replay.simulateRouteBlockage();
   assert.deepEqual(repeatSnapshot.state, replay.getSnapshot().state);
   assert.deepEqual(repeatSnapshot.currentPlan, replay.getSnapshot().currentPlan);
