@@ -1,5 +1,6 @@
 import { RouteSchema, type Route } from "../../../domain/route/schema";
 import { supabase } from "../client";
+import { normalizeDatabaseTimestamp } from "./timestamps";
 
 type RouteDatabaseRow = {
   id: string;
@@ -36,7 +37,7 @@ function toRoute(row: RouteDatabaseRow): Route {
       longitude: row.destination_longitude,
     },
     blockedReason: row.blocked_reason,
-    updatedAt: row.updated_at,
+    updatedAt: normalizeDatabaseTimestamp(row.updated_at),
   });
 }
 
