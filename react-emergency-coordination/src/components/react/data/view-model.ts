@@ -5,6 +5,7 @@ import type { ResourceType } from "../../../domain/resource/schema";
 import type { ResponsePlan } from "../../../domain/response-plan/schema";
 import type { RouteStatus } from "../../../domain/route/schema";
 import type { StateChange } from "../../../domain/state-change/schema";
+import type { DemoStateSnapshot } from "../../../lib/demo/fixtures";
 
 export type StatusTone = "green" | "blue" | "amber" | "red" | "gray";
 
@@ -118,7 +119,7 @@ function actionForPlan(state: EmergencyState, plan: ResponsePlan | null): Dashbo
 }
 
 function toTimeline(changes: readonly StateChange[]): DashboardTimelineItem[] {
-  return [...changes]
+  return [...new Map(changes.map((change) => [change.id, change])).values()]
     .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt))
     .map((change) => ({
       id: change.id,
@@ -130,7 +131,7 @@ function toTimeline(changes: readonly StateChange[]): DashboardTimelineItem[] {
 }
 
 export function createDashboardViewModel(
-  snapshot: { state: EmergencyState; agentRuns: readonly AgentRun[]; stateChanges: readonly StateChange[] },
+  snapshot: DemoStateSnapshot,
 ): DashboardViewModel {
   const { state, agentRuns, stateChanges } = snapshot;
   const plan = state.activePlan;
