@@ -367,27 +367,20 @@ function failureResult(
   state: EmergencyState,
   plan: ResponsePlan,
   error: SimulationError,
-  executedActions: readonly string[],
-  remainingActions: readonly string[],
-  stateChanges: readonly StateChange[],
   events: readonly SimulationEvent[],
-  working: WorkingState,
   failedAction: string | null,
-  timestamp?: string,
 ): SimulationResult {
-  const nextState =
-    failedAction !== null && timestamp !== undefined
-      ? resultState(state, working, plan, timestamp, "FAILED", failedAction)
-      : state;
   return {
     success: false,
-    state: nextState,
+    state,
     plan,
-    executedActions,
+    executedActions: [],
     failedAction,
-    remainingActions,
-    stateChanges,
-    events,
+    remainingActions: Array.isArray(plan.actions) ? plan.actions.map((action) => action.actionId) : [],
+    stateChanges: [],
+    events: events.map((event) => event.success
+      ? { ...event, success: false, reason: `Execution rolled back: ${error.message}`, after: event.before }
+      : event),
     error,
   };
 }
@@ -403,15 +396,6 @@ export function executeApprovedPlan(
       plan,
       simulationError("PLAN_INVALID", "ResponsePlan structure is invalid."),
       [],
-      [],
-      [],
-      [],
-      {
-        resources: state.resources,
-        facilities: state.facilities,
-        routes: state.routes,
-        planActions: state.planActions,
-      },
       null,
     );
   }
@@ -425,15 +409,6 @@ export function executeApprovedPlan(
       plan,
       simulationError("PLAN_ALREADY_EXECUTED", "ResponsePlan has already been simulated."),
       [],
-      plan.actions.map((action) => action.actionId),
-      [],
-      [],
-      {
-        resources: state.resources,
-        facilities: state.facilities,
-        routes: state.routes,
-        planActions: state.planActions,
-      },
       null,
     );
   }
@@ -444,15 +419,6 @@ export function executeApprovedPlan(
       plan,
       simulationError("PLAN_INVALID", "ResponsePlan incidentId does not match the current incident."),
       [],
-      plan.actions.map((action) => action.actionId),
-      [],
-      [],
-      {
-        resources: state.resources,
-        facilities: state.facilities,
-        routes: state.routes,
-        planActions: state.planActions,
-      },
       null,
     );
   }
@@ -462,15 +428,6 @@ export function executeApprovedPlan(
       plan,
       simulationError("PLAN_STALE", "ResponsePlan stateVersion is not current."),
       [],
-      plan.actions.map((action) => action.actionId),
-      [],
-      [],
-      {
-        resources: state.resources,
-        facilities: state.facilities,
-        routes: state.routes,
-        planActions: state.planActions,
-      },
       null,
     );
   }
@@ -480,15 +437,6 @@ export function executeApprovedPlan(
       plan,
       simulationError("PLAN_NOT_EXECUTABLE", "Only an APPROVED response plan can be simulated."),
       [],
-      plan.actions.map((action) => action.actionId),
-      [],
-      [],
-      {
-        resources: state.resources,
-        facilities: state.facilities,
-        routes: state.routes,
-        planActions: state.planActions,
-      },
       null,
     );
   }
@@ -500,24 +448,26 @@ export function executeApprovedPlan(
         issue.code === "PLAN_STATE_VERSION_STALE" ||
         issue.code === "PLAN_STATE_VERSION_FUTURE",
     );
+    const resourceFailure = validation.errors.some((issue) => issue.code.startsWith("RESOURCE_"));
+    const facilityFailure = validation.errors.some((issue) => issue.code.startsWith("FACILITY_") || issue.code === "CAPACITY_DEMAND_REQUIRED" || issue.code === "INVALID_CAPACITY_DEMAND");
+    const routeFailure = validation.errors.some((issue) => issue.code.startsWith("ROUTE_"));
     return failureResult(
       state,
       plan,
       simulationError(
-        stale ? "PLAN_STALE" : "PLAN_INVALID",
+        stale
+          ? "PLAN_STALE"
+          : resourceFailure
+            ? "RESOURCE_EXECUTION_FAILED"
+            : facilityFailure
+              ? "FACILITY_EXECUTION_FAILED"
+              : routeFailure
+                ? "ROUTE_EXECUTION_FAILED"
+                : "PLAN_INVALID",
         validation.errors.map((issue) => issue.message).join(" ") ||
           "ResponsePlan is not executable.",
       ),
       [],
-      plan.actions.map((action) => action.actionId),
-      [],
-      [],
-      {
-        resources: state.resources,
-        facilities: state.facilities,
-        routes: state.routes,
-        planActions: state.planActions,
-      },
       null,
     );
   }
@@ -543,19 +493,12 @@ export function executeApprovedPlan(
 
   for (let index = 0; index < actions.length; index += 1) {
     const action = actions[index];
-    const remainingActions = actions
-      .slice(index)
-      .flatMap((entry) => (entry === undefined ? [] : [entry.id]));
     if (action === undefined) {
       return failureResult(
         state,
         plan,
         simulationError("INVALID_ACTION_REFERENCE", "Plan action reference could not be resolved."),
-        executedActions,
-        remainingActions,
-        stateChanges,
         events,
-        working,
         null,
       );
     }
@@ -577,7 +520,6 @@ export function executeApprovedPlan(
         reason: execution.message,
         occurredAt: timestamp,
       });
-      const failedChange = actionStatusChange(plan, action, "FAILED", timestamp);
       return failureResult(
         state,
         plan,
@@ -586,13 +528,8 @@ export function executeApprovedPlan(
         execution.code === "ROUTE_EXECUTION_FAILED"
           ? execution
           : simulationError("ACTION_EXECUTION_FAILED", execution.message, action.id),
-        executedActions,
-        remainingActions,
-        [...stateChanges, failedChange],
         events,
-        working,
         action.id,
-        timestamp,
       );
     }
 
