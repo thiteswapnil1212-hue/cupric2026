@@ -354,12 +354,14 @@ export async function updateEmergencyState(
 ) {
   assertOperation(operation);
 
-  const currentState = await atStage("load", () => loadEmergencyState(incidentId));
+  await atStage("load", () => loadEmergencyState(incidentId));
   const appliedChange = await atStage("entity-write", () =>
     applyUpdate(incidentId, operation),
   );
 
-  if (appliedChange === null) return currentState;
+  if (appliedChange === null) {
+    return atStage("reload", () => loadEmergencyState(incidentId));
+  }
 
   const occurredAt = new Date().toISOString();
   const stateChange: StateChange = {
