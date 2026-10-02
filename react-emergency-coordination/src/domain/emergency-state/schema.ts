@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { FacilitySchema } from "../facility/schema";
 import { IncidentSchema } from "../incident/schema";
+import { PlanActionSchema } from "../plan-action/schema";
 import { ResponsePlanSchema } from "../response-plan/schema";
 import { ResourceSchema } from "../resource/schema";
 import { RouteSchema } from "../route/schema";
@@ -11,6 +12,7 @@ export const EmergencyStateSchema = z
     resources: z.array(ResourceSchema),
     facilities: z.array(FacilitySchema),
     routes: z.array(RouteSchema),
+    planActions: z.array(PlanActionSchema),
     activePlan: ResponsePlanSchema.nullable(),
     stateVersion: z.number().int().nonnegative(),
     updatedAt: z.iso.datetime(),
