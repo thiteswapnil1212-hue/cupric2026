@@ -156,17 +156,19 @@ function executeAction(
 ): ActionExecution | SimulationError {
   const before = entityStates(state, action);
 
-  const resourceValidation = validateResourceAssignment(
-    state.resources,
-    action.resourceIds,
-    action.id,
-  );
-  if (!resourceValidation.valid) {
-    return simulationError(
-      "RESOURCE_EXECUTION_FAILED",
-      resourceValidation.errors.map((error) => error.message).join(" "),
+  if (action.resourceIds.length > 0) {
+    const resourceValidation = validateResourceAssignment(
+      state.resources,
+      action.resourceIds,
       action.id,
     );
+    if (!resourceValidation.valid) {
+      return simulationError(
+        "RESOURCE_EXECUTION_FAILED",
+        resourceValidation.errors.map((error) => error.message).join(" "),
+        action.id,
+      );
+    }
   }
 
   for (const facilityId of action.facilityIds) {
