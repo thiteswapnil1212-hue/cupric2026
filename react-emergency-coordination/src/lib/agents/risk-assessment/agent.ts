@@ -5,6 +5,7 @@ import {
   GeminiError,
   generateStructuredJson,
   serializeGeminiInput,
+  type GenerateStructuredJsonOptions,
 } from "../../ai/gemini";
 import {
   RiskAssessmentSchema,
@@ -56,6 +57,12 @@ export class RiskAssessmentAgentError extends Error {
     this.issues = issues;
   }
 }
+
+export type RiskAssessmentAgentDependencies = {
+  readonly generateStructuredJson: (
+    options: GenerateStructuredJsonOptions<RiskAssessment>,
+  ) => Promise<RiskAssessment>;
+};
 
 function compareIds(left: { id: string }, right: { id: string }): number {
   if (left.id < right.id) return -1;
@@ -169,6 +176,9 @@ function validateAssessmentFacts(
 
 export async function runRiskAssessment(
   emergencyState: EmergencyState,
+  dependencies: RiskAssessmentAgentDependencies = {
+    generateStructuredJson,
+  },
 ): Promise<RiskAssessment> {
   const stateValidation = EmergencyStateSchema.safeParse(emergencyState);
   if (!stateValidation.success) {
@@ -186,7 +196,7 @@ export async function runRiskAssessment(
   const state = stateValidation.data;
   let generatedAssessment: RiskAssessment;
   try {
-    generatedAssessment = await generateStructuredJson({
+    generatedAssessment = await dependencies.generateStructuredJson({
       systemInstruction: riskAssessmentSystemInstruction,
       input: serializeRiskAssessmentFacts(state),
       schema: RiskAssessmentSchema,
