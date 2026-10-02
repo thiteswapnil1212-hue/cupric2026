@@ -544,3 +544,39 @@ export async function updateResponsePlan(
   });
   return toResponsePlanRecord(row);
 }
+
+export async function transitionResponsePlan(
+  id: string,
+  expectedStatus: ResponsePlan["status"],
+  updates: ResponsePlanUpdates,
+): Promise<ResponsePlanRecord | null> {
+  const databaseUpdates = toDatabaseUpdates(updates);
+  const updatesRelations =
+    updates.alternatives !== undefined || updates.dependencies !== undefined;
+  if (databaseUpdates.status === undefined) {
+    throw new Error("A response plan transition must provide its next status.");
+  }
+  if (Object.keys(databaseUpdates).length === 0 && !updatesRelations) {
+    throw new Error("At least one response plan field must be supplied for transition.");
+  }
+
+  const { data, error } = await supabase
+    .from("response_plans")
+    .update(databaseUpdates)
+    .eq("id", id)
+    .eq("status", expectedStatus)
+    .select("*")
+    .limit(1)
+    .overrideTypes<ResponsePlanDatabaseRow[], { merge: false }>();
+
+  if (error) throw error;
+  const row = data[0];
+  if (row === undefined) return null;
+  if (updatesRelations) {
+    await replacePlanRelations(id, {
+      alternatives: updates.alternatives,
+      dependencies: updates.dependencies,
+    });
+  }
+  return toResponsePlanRecord(row);
+}
