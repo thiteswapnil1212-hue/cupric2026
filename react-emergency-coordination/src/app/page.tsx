@@ -40,7 +40,7 @@ function facilityRows(facilities: DashboardFacility[]) {
 }
 
 function agentRows(agents: DashboardAgent[]) {
-  return agents.map((agent) => <div className="agent-row" key={agent.id}><div className="agent-check">{agent.status === "COMPLETED" ? <Check size={13} /> : <Activity size={13} />}</div><div><strong>{agent.label}</strong><span>{agent.statusLabel} · {agent.timeLabel}</span></div><span className={`agent-state ${agent.tone === "amber" ? "state-review" : ""}`}>{agent.statusLabel}</span></div>);
+  return agents.map((agent) => <div className="agent-row" key={agent.id}><div className="agent-check">{agent.status === "COMPLETED" ? <Check size={13} /> : <Activity size={13} />}</div><div><strong>{agent.label}</strong><span>{agent.purpose}</span><span>{agent.statusLabel} · {agent.timeLabel} · {agent.durationLabel}</span><span>{agent.resultSummary}</span></div><span className={`agent-state ${agent.tone === "amber" ? "state-review" : ""}`}>{agent.statusLabel}</span></div>);
 }
 
 function timelineRows(items: DashboardTimelineItem[]) {
@@ -49,6 +49,23 @@ function timelineRows(items: DashboardTimelineItem[]) {
 
 function mapRouteClass(route: DashboardRoute): string {
   return route.status === "OPEN" ? "route-active" : "route-blocked";
+}
+
+function ExplainabilityPanel({ model }: { model: DashboardViewModel }) {
+  const risk = model.riskAssessment;
+  const routing = model.resourceRoutingAssessment;
+  const planning = model.responsePlanningResult;
+  const validation = model.validation;
+  return <section className="panel explainability-panel" id="explainability">
+    <PanelHeading eyebrow="DECISION TRACE" title="Agent findings and explainability" />
+    <div className="explainability-grid">
+      <div className="explainability-column"><span className="eyebrow">RISK ASSESSMENT</span>{risk ? <><div className="fact-row"><span>Severity</span><strong>{risk.severity}</strong></div><div className="fact-row"><span>Priority</span><strong>{risk.priority}</strong></div><div className="fact-row"><span>Affected population</span><strong>{risk.affectedPopulation}</strong></div><div className="fact-block"><span>Key hazards</span><strong>{risk.hazardFactors.join(" · ")}</strong></div><div className="fact-block"><span>Risk factors</span><strong>{risk.riskFactors.join(" · ")}</strong></div></> : <p>DATA UNAVAILABLE</p>}</div>
+      <div className="explainability-column"><span className="eyebrow">RESOURCE &amp; ROUTING</span>{routing ? <><div className="fact-block"><span>Resources</span><strong>{model.resources.filter((resource) => resource.status === "AVAILABLE").length} available of {model.resources.length}</strong></div><div className="fact-block"><span>Facilities</span><strong>{routing.facilities.map((facility) => `${facility.facilityId}: ${facility.availableCapacity}/${facility.totalCapacity}`).join(" · ")}</strong></div><div className="fact-block"><span>Routes</span><strong>{routing.routes.map((route) => `${route.routeId} ${route.status}`).join(" · ")}</strong></div>{model.reassessment.required && <div className="fact-block"><span>Affected plan dependency</span><strong>{model.reassessment.routeId}</strong></div>}</> : <p>DATA UNAVAILABLE</p>}</div>
+      <div className="explainability-column"><span className="eyebrow">RESPONSE PLANNING</span>{planning ? <><div className="fact-block"><span>Primary plan</span><strong>{planning.plan.id}</strong></div><div className="fact-block"><span>Priority actions</span><strong>{planning.actions.map((action) => action.description).join(" · ")}</strong></div><div className="fact-block"><span>Rationale</span><strong>{planning.reasoning}</strong></div></> : <p>DATA UNAVAILABLE</p>}</div>
+      <div className="explainability-column"><span className="eyebrow">SYSTEM VALIDATION</span>{validation ? <><div className="validation-state"><StatusDot tone={validation.valid ? "green" : "red"} /><strong>{validation.valid ? "VALID" : "INVALID"}</strong></div>{validation.valid ? <div className="fact-block"><span>Checks</span><strong>Resources available · No duplicate assignments · Facility capacity sufficient · Route operational · State version current · Dependencies consistent</strong></div> : <div className="fact-block"><span>Errors</span><strong>{validation.errors.map((error) => error.message).join(" · ")}</strong></div>}</> : <p>VALIDATION NOT AVAILABLE</p>}</div>
+    </div>
+    <div className="explainability-footer"><div><span className="eyebrow">HUMAN DECISION</span><strong>{model.humanDecision ? `${model.humanDecision.decision} by ${model.humanDecision.coordinatorId}` : model.activePlan?.status === "PENDING_APPROVAL" ? "PENDING APPROVAL" : "Not recorded"}</strong></div><div><span className="eyebrow">EXECUTION STATE</span><strong>{model.activePlan?.status ?? "No active plan"}</strong></div>{model.previousPlan && <div><span className="eyebrow">REPLANNING</span><strong>{model.previousPlan.id} → {model.activePlan?.id} · {model.reassessment.routeId} affected</strong></div>}</div>
+  </section>;
 }
 
 function Dashboard({ model, snapshot, busy, onStart, onApprove, onModify, onReject, onBlock, onReset }: { model: DashboardViewModel; snapshot: DemoSnapshot; busy: boolean; onStart: () => void; onApprove: () => void; onModify: () => void; onReject: () => void; onBlock: () => void; onReset: () => void }) {
@@ -81,6 +98,7 @@ function Dashboard({ model, snapshot, busy, onStart, onApprove, onModify, onReje
         </div>
         <div className="secondary-grid"><section className="panel table-panel" id="resources"><PanelHeading eyebrow="FIELD OPERATIONS" title="Resource status" action="View all resources" /><div className="data-table"><div className="table-row table-head"><span>Resource</span><span>Type</span><span>Status</span><span>Assignment</span><span>Location</span></div>{resourceRows(model.resources)}</div></section><section className="panel facilities-panel" id="facilities"><PanelHeading eyebrow="CARE CAPACITY" title="Facilities" action="View all" /><div className="facility-list">{facilityRows(model.facilities)}</div></section></div>
         <div className="bottom-grid"><section className="panel activity-panel" id="activity"><PanelHeading eyebrow="PROCESSING ACTIVITY" title="Agent activity" /><div className="agent-list">{agentRows(model.agents)}</div><div className="ai-note"><CircleDot size={13} />AI analyzes and recommends. Human coordinators authorize execution.</div></section><section className="panel timeline-panel" id="timeline"><PanelHeading eyebrow="AUDIT TRAIL" title="Situation timeline" action="View full history" /><div className="timeline-list">{timelineRows(model.timeline)}</div></section></div>
+        <ExplainabilityPanel model={model} />
       </main>
       <footer className="app-footer"><span>REACT Emergency Coordination · Deterministic demo environment</span><span>State version {model.stateVersion} <span className="footer-divider">|</span> {model.incident.id}</span></footer>
     </div>
