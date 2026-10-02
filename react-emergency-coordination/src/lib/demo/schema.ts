@@ -15,6 +15,7 @@ export const DemoStageSchema = z.enum([
   "ANALYZING",
   "PLAN_GENERATED",
   "AWAITING_APPROVAL",
+  "AWAITING_EXECUTION",
   "EXECUTING",
   "SITUATION_CHANGED",
   "CHANGE_DETECTED",
@@ -44,6 +45,7 @@ export type DemoSnapshot = {
   readonly stateChanges: readonly StateChange[];
   readonly currentPlan: ResponsePlan | null;
   readonly previousPlan: ResponsePlan | null;
+  readonly planHistory: readonly ResponsePlan[];
   readonly riskAssessment: RiskAssessment | null;
   readonly resourceRoutingAssessment: ResourceRoutingAssessment | null;
   readonly responsePlanningResult: ResponsePlanningResult | null;
