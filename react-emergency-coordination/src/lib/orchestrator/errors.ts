@@ -24,6 +24,7 @@ export type OrchestrationFailureMetadata = {
   retryable: boolean;
   failedStage: ReactAgentStage | null;
   completedStages: readonly ReactAgentStage[];
+  completedWrites: readonly string[];
   usablePlanExists: boolean;
   partialPersistence: boolean;
   recommendation: RecoveryRecommendation;
@@ -246,6 +247,7 @@ function metadata(
     retryable: overrides.retryable ?? false,
     failedStage: overrides.failedStage ?? null,
     completedStages: [...(overrides.completedStages ?? [])],
+    completedWrites: [...(overrides.completedWrites ?? [])],
     usablePlanExists: overrides.usablePlanExists ?? false,
     partialPersistence,
     recommendation: overrides.recommendation ?? "ABORT",
@@ -272,6 +274,7 @@ export class ReactOrchestrationError extends Error {
     this.failure = Object.freeze({
       ...failure,
       completedStages: Object.freeze([...failure.completedStages]),
+      completedWrites: Object.freeze([...failure.completedWrites]),
     });
     this.issues = issues === undefined ? undefined : Object.freeze([...issues]);
   }
@@ -306,6 +309,7 @@ export class ReactOrchestrationStageError extends ReactOrchestrationError {
     stage: ReactAgentStage,
     cause: unknown,
     completedStages: readonly ReactAgentStage[] = [],
+    completedWrites: readonly string[] = [],
   ) {
     const candidateCode =
       typeof cause === "object" &&
@@ -316,14 +320,20 @@ export class ReactOrchestrationStageError extends ReactOrchestrationError {
         : null;
     const code = getSafeAgentCode(stage, candidateCode);
     const classification = classifyAgentFailure(stage, code);
+    const partialPersistence = completedWrites.length > 0;
     super(`REACT orchestration failed during the ${stage} stage.`, {
       code: "ORCHESTRATOR_STAGE_FAILED",
       metadata: metadata({
+        status: partialPersistence ? "PARTIAL_FAILURE" : "FAILED",
         failureCategory: classification.category,
-        retryable: classification.retryable,
+        retryable: classification.retryable && !partialPersistence,
         failedStage: stage,
         completedStages,
-        recommendation: classification.recommendation,
+        completedWrites,
+        partialPersistence,
+        recommendation: partialPersistence
+          ? "REPAIR_PERSISTENCE"
+          : classification.recommendation,
       }),
       safeCause: {
         name: "AgentFailure",
@@ -343,7 +353,9 @@ export class ReactOrchestrationOutputError extends ReactOrchestrationError {
       failureCategory?: OrchestrationFailureCategory;
       failedStage?: ReactAgentStage | null;
       completedStages?: readonly ReactAgentStage[];
+      completedWrites?: readonly string[];
       usablePlanExists?: boolean;
+      partialPersistence?: boolean;
       recommendation?: RecoveryRecommendation;
     } = {},
   ) {
@@ -353,7 +365,9 @@ export class ReactOrchestrationOutputError extends ReactOrchestrationError {
         failureCategory: options.failureCategory ?? "UNEXPECTED_ERROR",
         failedStage: options.failedStage ?? "response-planning",
         completedStages: options.completedStages,
+        completedWrites: options.completedWrites,
         usablePlanExists: options.usablePlanExists,
+        partialPersistence: options.partialPersistence,
         recommendation: options.recommendation,
       }),
       safeCause: {
@@ -438,6 +452,7 @@ export class ReactOrchestrationPersistenceError extends ReactOrchestrationError 
         retryable,
         failedStage: options.stage,
         completedStages: options.completedStages,
+        completedWrites: options.completedWrites,
         usablePlanExists: options.usablePlanExists,
         partialPersistence,
         recommendation: partialPersistence
