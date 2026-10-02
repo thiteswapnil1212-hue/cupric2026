@@ -1,6 +1,6 @@
-import type { AgentRun } from "../../../domain/agent-run/schema";
-import type { EmergencyState } from "../../../domain/emergency-state/schema";
-import type { StateChange } from "../../../domain/state-change/schema";
+import type { AgentRun } from "../../domain/agent-run/schema";
+import type { EmergencyState } from "../../domain/emergency-state/schema";
+import type { StateChange } from "../../domain/state-change/schema";
 
 const timestamp = "2026-10-02T08:46:18.000Z";
 
@@ -50,10 +50,10 @@ const initialState: EmergencyState = {
       id: "RES-AMB-01",
       name: "Ambulance 07",
       type: "AMBULANCE",
-      status: "DISPATCHED",
+      status: "AVAILABLE",
       location: { latitude: 18.515, longitude: 73.849 },
       capacity: 4,
-      currentAssignmentId: "PLAN-001",
+      currentAssignmentId: null,
       capabilities: ["Patient transport"],
       updatedAt: timestamp,
     },
@@ -88,7 +88,7 @@ const initialState: EmergencyState = {
       status: "OPERATIONAL",
       location: { latitude: 18.534, longitude: 73.868, address: "North medical district" },
       totalCapacity: 20,
-      availableCapacity: 18,
+      availableCapacity: 20,
       capabilities: ["Emergency care"],
       updatedAt: timestamp,
     },
@@ -99,7 +99,7 @@ const initialState: EmergencyState = {
       status: "LIMITED",
       location: { latitude: 18.505, longitude: 73.847, address: "South medical district" },
       totalCapacity: 10,
-      availableCapacity: 4,
+      availableCapacity: 10,
       capabilities: ["Emergency care"],
       updatedAt: timestamp,
     },
