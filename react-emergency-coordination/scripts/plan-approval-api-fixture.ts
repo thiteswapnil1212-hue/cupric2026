@@ -108,6 +108,9 @@ const invalidSubmit = await handlers.submit(
   { params: Promise.resolve({ planId: "unknown" }) },
 );
 assert.equal(invalidSubmit.status, 404);
+plans.set("plan-1", { ...plan, status: "INVALID" });
+assert.equal((await handlers.submit(request("POST"), context)).status, 409);
+plans.set("plan-1", { ...plan, status: "PENDING_APPROVAL" });
 
 const approved = await handlers.approve(request("POST", decision), context);
 assert.equal(approved.status, 201);
