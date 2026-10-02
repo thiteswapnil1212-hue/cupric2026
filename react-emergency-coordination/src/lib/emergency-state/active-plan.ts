@@ -10,9 +10,7 @@ export type ActiveEmergencyPlanStatus = "NONE" | "ACTIVE" | "STALE" | "INVALID";
 
 export type ActiveEmergencyPlanIssueCode =
   | EmergencyStateConsistencyIssueCode
-  | "MULTIPLE_ACTIVE_PLANS"
-  | "ACTIVE_PLAN_DEPENDENCIES_UNAVAILABLE"
-  | "ACTIVE_PLAN_DOMAIN_FIELDS_UNAVAILABLE";
+  | "MULTIPLE_ACTIVE_PLANS";
 
 export type ActiveEmergencyPlanIssue = {
   code: ActiveEmergencyPlanIssueCode;
@@ -75,13 +73,12 @@ export function assessActiveEmergencyPlan(
   const status: ActiveEmergencyPlanStatus =
     errors.length > 0
       ? "INVALID"
-      : warnings.some((issue) => isStaleWarning(issue))
+      : warnings.some((issue) => issue.code === "ACTIVE_PLAN_STALE")
         ? "STALE"
         : "ACTIVE";
 
   return {
     plan,
-    persistedPlan: null,
     status,
     errors,
     warnings,
@@ -98,9 +95,7 @@ function comparePersistedPlans(left: ResponsePlan, right: ResponsePlan): number 
 }
 
 /**
- * Retrieves the latest active-status plan metadata for this state.
- * The current table does not persist fields required to construct ResponsePlan,
- * so `plan` remains null and the incomplete persistence is reported as warnings.
+ * Retrieves the latest complete active-status plan for this state.
  */
 export async function getActiveEmergencyPlan(
   state: EmergencyState,
