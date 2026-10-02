@@ -3,12 +3,13 @@ import {
   type EmergencyState,
 } from "../../domain/emergency-state/schema";
 import {
-  getActiveResponsePlanForIncident,
   getIncidentById,
   listFacilities,
+  listPlanActionsForPlan,
   listResources,
   listRoutes,
 } from "../supabase/services";
+import { getCompleteActiveResponsePlanForIncident } from "../supabase/services/response-plans";
 import {
   getEmergencyStateVersion,
   initializeEmergencyStateVersion,
@@ -52,8 +53,13 @@ export async function loadEmergencyState(
       listResources(),
       listFacilities(),
       listRoutes(),
-      getActiveResponsePlanForIncident(incidentId),
+      getCompleteActiveResponsePlanForIncident(incidentId),
     ]);
+
+  const planActions =
+    activePlanRecord === null
+      ? []
+      : await listPlanActionsForPlan(activePlanRecord.id);
 
   if (activePlanRecord !== null) {
     if (activePlanRecord.incidentId !== incident.id) {
@@ -67,16 +73,39 @@ export async function loadEmergencyState(
       );
     }
 
-    throw new Error(
-      `Cannot load EmergencyState for incident ${incident.id}: the persisted response plan does not include domain fields required by ResponsePlanSchema.`,
-    );
+    for (const actionReference of activePlanRecord.actions) {
+      const action = planActions.find(
+        (planAction) => planAction.id === actionReference.actionId,
+      );
+      if (action === undefined) {
+        throw new Error(
+          `Active response plan ${activePlanRecord.id} references missing PlanAction ${actionReference.actionId}.`,
+        );
+      }
+      if (
+        action.planId !== activePlanRecord.id ||
+        action.sequence !== actionReference.sequence
+      ) {
+        throw new Error(
+          `PlanAction ${action.id} does not match its reference in active response plan ${activePlanRecord.id}.`,
+        );
+      }
+    }
+
+    if (planActions.length !== activePlanRecord.actions.length) {
+      throw new Error(
+        `Active response plan ${activePlanRecord.id} has PlanAction records without matching ordered references.`,
+      );
+    }
   }
 
   const persistedTimestamps = [
     incident.updatedAt,
+    ...(activePlanRecord === null ? [] : [activePlanRecord.updatedAt]),
     ...resources.map((resource) => resource.updatedAt),
     ...facilities.map((facility) => facility.updatedAt),
     ...routes.map((route) => route.updatedAt),
+    ...planActions.map((action) => action.updatedAt),
   ];
   const latestUpdatedAt = persistedTimestamps.reduce((latest, timestamp) =>
     Date.parse(timestamp) > Date.parse(latest) ? timestamp : latest,
@@ -87,7 +116,8 @@ export async function loadEmergencyState(
     resources,
     facilities,
     routes,
-    activePlan: null,
+    planActions,
+    activePlan: activePlanRecord,
     stateVersion,
     updatedAt: new Date(latestUpdatedAt).toISOString(),
   });
