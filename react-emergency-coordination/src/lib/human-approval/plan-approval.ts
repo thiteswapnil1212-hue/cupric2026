@@ -62,6 +62,13 @@ function decisionMetadata(
   decision: HumanDecision["decision"],
   modifiedPlanId: string | null,
 ): HumanDecision | PlanApprovalFailure {
+  if (metadata.incidentId !== plan.incidentId) {
+    return failure(
+      "PLAN_INVALID",
+      "Human decision incidentId must match the response plan incidentId.",
+    );
+  }
+
   const parsed = HumanDecisionSchema.safeParse({
     id: metadata.id,
     planId: plan.id,
