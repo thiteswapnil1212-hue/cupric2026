@@ -8,6 +8,7 @@ import {
   submitPlanForApproval,
   type DecisionMetadata,
   type PlanApprovalErrorCode,
+  type PlanApprovalOperationResult,
 } from "./plan-approval";
 import { ResponsePlanSchema } from "../../domain/response-plan/schema";
 import {
@@ -125,10 +126,10 @@ function isResponse(value: unknown): value is NextResponse {
 }
 
 function serializeResult(
-  result: ReturnType<typeof submitPlanForApproval>,
+  result: PlanApprovalOperationResult,
   status = 200,
 ): NextResponse {
-  if (!result.success) {
+  if ("error" in result) {
     return errorResponse(result.error.code, result.error.message, domainStatus(result.error.code));
   }
   return response(
