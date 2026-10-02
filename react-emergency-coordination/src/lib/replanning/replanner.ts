@@ -57,6 +57,7 @@ function baseResult(
     readonly riskAssessment: RiskAssessment | null;
     readonly resourceRoutingAssessment: ResourceRoutingAssessment | null;
     readonly revisedPlan: ResponsePlan | null;
+    readonly revisedPlanActions?: ReplanningResult["revisedPlanActions"];
     readonly validation: PlanValidationResult | null;
     readonly previousPlanSuperseded: boolean;
     readonly error: ReplanningError | null;
@@ -77,6 +78,7 @@ function baseResult(
     riskAssessment: values.riskAssessment,
     resourceRoutingAssessment: values.resourceRoutingAssessment,
     revisedPlan: values.revisedPlan,
+    revisedPlanActions: values.revisedPlanActions ?? null,
     validation: values.validation,
     previousPlanSuperseded: values.previousPlanSuperseded,
     previousPlanSupersessionPersisted: false,
@@ -109,6 +111,7 @@ function invalidResult(
     riskAssessment: null,
     resourceRoutingAssessment: null,
     revisedPlan: null,
+    revisedPlanActions: null,
     validation: null,
     previousPlanSuperseded: false,
     previousPlanSupersessionPersisted: false,
@@ -367,6 +370,7 @@ export async function replanEmergencyResponse(
     riskAssessment: pipeline.riskAssessment,
     resourceRoutingAssessment: pipeline.resourceRoutingAssessment,
     revisedPlan: ResponsePlanSchema.parse(revisedPlan),
+    revisedPlanActions: generated.actions,
     validation,
     previousPlanSuperseded: true,
     error: null,
