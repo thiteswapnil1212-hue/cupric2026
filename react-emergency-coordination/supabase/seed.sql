@@ -50,6 +50,11 @@ ON CONFLICT (id) DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
   created_at = EXCLUDED.created_at;
 
+-- Migration 0002 only initializes incidents that exist when it is applied.
+INSERT INTO emergency_states (incident_id)
+VALUES ('incident-demo-001')
+ON CONFLICT (incident_id) DO NOTHING;
+
 INSERT INTO resources (
   id,
   name,
