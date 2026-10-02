@@ -40,11 +40,11 @@ export type DetectedChange = {
   readonly changeType: ChangeType;
   readonly previousValue: ChangeValue;
   readonly currentValue: ChangeValue;
-  readonly operationalImpact: "NONE" | "POTENTIAL" | "REASSESSMENT_REQUIRED";
+  operationalImpact: "NONE" | "POTENTIAL" | "REASSESSMENT_REQUIRED";
 };
 
 export type AffectedDependency = {
-  readonly entityType: Exclude<ChangeEntityType, "INCIDENT" | "PLAN"> | "INCIDENT";
+  readonly entityType: ChangeEntityType;
   readonly entityId: string;
   readonly reason: string;
 };
