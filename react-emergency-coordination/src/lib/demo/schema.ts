@@ -33,6 +33,8 @@ export type DemoError = {
   readonly message: string;
   readonly stage: DemoStage;
   readonly recovery: "RETRY" | "RESET";
+  readonly recoverable: boolean;
+  readonly occurredAt: string;
 };
 
 export type DemoSnapshot = {
