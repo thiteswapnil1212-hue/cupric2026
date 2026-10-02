@@ -8,7 +8,6 @@ import {
 } from "../../domain/response-plan/schema";
 import type { ResourceRoutingAssessment } from "../agents/resource-routing/schema";
 import type { RiskAssessment } from "../agents/risk-assessment/schema";
-import type { ResponsePlanningResult } from "../agents/response-planning/agent";
 import { detectEmergencyStateChanges } from "../change-detection/detector";
 import type { ChangeDetectionSuccess } from "../change-detection/schema";
 import { validateEmergencyStateConsistency } from "../emergency-state/consistency";
