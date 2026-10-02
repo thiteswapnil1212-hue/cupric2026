@@ -1,0 +1,110 @@
+import { z } from "zod";
+import { EmergencyStateSchema } from "../../domain/emergency-state/schema";
+import { PlanActionSchema } from "../../domain/plan-action/schema";
+import { ResponsePlanSchema } from "../../domain/response-plan/schema";
+import { ResourceRoutingAssessmentSchema } from "../agents/resource-routing/schema";
+import { RiskAssessmentSchema } from "../agents/risk-assessment/schema";
+import { AlternativeRecommendationSchema } from "../agents/response-planning/schema";
+import type { ResponsePlanningResult as AgentResponsePlanningResult } from "../agents/response-planning/agent";
+
+export const ReactAgentStageSchema = z.enum([
+  "risk-assessment",
+  "resource-routing",
+  "response-planning",
+]);
+
+export type ReactAgentStage = z.infer<typeof ReactAgentStageSchema>;
+
+const planValidationIssueSchema = z
+  .object({
+    code: z.string().trim().min(1),
+    message: z.string().trim().min(1),
+    actionId: z.string().optional(),
+    entityType: z
+      .enum(["PLAN", "INCIDENT", "ACTION", "RESOURCE", "FACILITY", "ROUTE"])
+      .optional(),
+    entityId: z.string().optional(),
+  })
+  .strict();
+
+const planValidationResultSchema = z
+  .object({
+    valid: z.boolean(),
+    errors: z.array(planValidationIssueSchema),
+    warnings: z.array(planValidationIssueSchema),
+  })
+  .strict();
+
+const responsePlanningResultShapeSchema = z
+  .object({
+    plan: ResponsePlanSchema,
+    actions: z.array(PlanActionSchema),
+    alternatives: z.array(
+      AlternativeRecommendationSchema.extend({
+        id: z.string().trim().min(1),
+        recommendationOnly: z.literal(true),
+      }).strict(),
+    ),
+    constraints: z.array(z.string()),
+    reasoning: z.string(),
+    confidence: z.number().min(0).max(1),
+    validation: planValidationResultSchema,
+  })
+  .strict();
+
+export const ResponsePlanningResultSchema =
+  z.custom<AgentResponsePlanningResult>((value) =>
+    responsePlanningResultShapeSchema.safeParse(value).success,
+  );
+
+export const OrchestratorStageTimingSchema = z
+  .object({
+    stage: ReactAgentStageSchema,
+    durationMs: z.number().finite().nonnegative(),
+  })
+  .strict();
+
+export const OrchestratorExecutionMetadataSchema = z
+  .object({
+    startedAt: z.iso.datetime(),
+    completedAt: z.iso.datetime(),
+    durationMs: z.number().finite().nonnegative(),
+    stageTimings: z.tuple([
+      OrchestratorStageTimingSchema.extend({
+        stage: z.literal("risk-assessment"),
+      }).strict(),
+      OrchestratorStageTimingSchema.extend({
+        stage: z.literal("resource-routing"),
+      }).strict(),
+      OrchestratorStageTimingSchema.extend({
+        stage: z.literal("response-planning"),
+      }).strict(),
+    ]),
+  })
+  .strict();
+
+export const ReactOrchestrationResultSchema = z
+  .object({
+    incidentId: EmergencyStateSchema.shape.incident.shape.id,
+    stateVersion: EmergencyStateSchema.shape.stateVersion,
+    completedStages: z.tuple([
+      z.literal("risk-assessment"),
+      z.literal("resource-routing"),
+      z.literal("response-planning"),
+    ]),
+    riskAssessment: RiskAssessmentSchema,
+    resourceRoutingAssessment: ResourceRoutingAssessmentSchema,
+    responsePlanning: ResponsePlanningResultSchema,
+    execution: OrchestratorExecutionMetadataSchema,
+  })
+  .strict();
+
+export type OrchestratorStageTiming = z.infer<
+  typeof OrchestratorStageTimingSchema
+>;
+export type OrchestratorExecutionMetadata = z.infer<
+  typeof OrchestratorExecutionMetadataSchema
+>;
+export type ReactOrchestrationResult = z.infer<
+  typeof ReactOrchestrationResultSchema
+>;
