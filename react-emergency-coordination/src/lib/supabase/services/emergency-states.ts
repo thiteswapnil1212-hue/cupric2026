@@ -65,9 +65,11 @@ export async function incrementEmergencyStateVersion(
   const { data, error } = await supabase
     .rpc("increment_emergency_state_version", {
       p_incident_id: incidentId,
-    })
-    .overrideTypes<number, { merge: false }>();
+    });
 
   if (error) throw error;
+  if (typeof data !== "number") {
+    throw new Error("Supabase returned no emergency state version after increment.");
+  }
   return assertStateVersion(data);
 }
