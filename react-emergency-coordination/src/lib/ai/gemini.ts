@@ -166,7 +166,7 @@ export async function generateStructuredJson<T>(
       config: {
         systemInstruction: options.systemInstruction,
         responseMimeType: "application/json",
-        responseSchema: options.schema,
+        responseJsonSchema: z.toJSONSchema(options.schema),
         httpOptions: { timeout: timeoutMs },
         ...options.generation,
       },
