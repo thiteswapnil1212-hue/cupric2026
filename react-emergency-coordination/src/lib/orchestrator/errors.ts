@@ -3,7 +3,14 @@ import type { ReactAgentStage } from "./schema";
 export type ReactOrchestrationErrorCode =
   | "ORCHESTRATOR_INPUT_INVALID"
   | "ORCHESTRATOR_STAGE_FAILED"
-  | "ORCHESTRATOR_OUTPUT_INVALID";
+  | "ORCHESTRATOR_OUTPUT_INVALID"
+  | "ORCHESTRATOR_PERSISTENCE_FAILED";
+
+export type OrchestratorPersistenceOperation =
+  | "agent-run"
+  | "response-plan"
+  | "plan-action"
+  | "verification";
 
 type ReactOrchestrationErrorOptions = {
   code: ReactOrchestrationErrorCode;
@@ -65,5 +72,30 @@ export class ReactOrchestrationOutputError extends ReactOrchestrationError {
       issues,
     });
     this.name = "ReactOrchestrationOutputError";
+  }
+}
+
+export class ReactOrchestrationPersistenceError extends ReactOrchestrationError {
+  readonly operation: OrchestratorPersistenceOperation;
+  readonly completedWrites: readonly string[];
+  readonly partialWritePossible: boolean;
+
+  constructor(options: {
+    message: string;
+    operation: OrchestratorPersistenceOperation;
+    stage: ReactAgentStage | null;
+    cause: unknown;
+    completedWrites: readonly string[];
+    partialWritePossible: boolean;
+  }) {
+    super(options.message, {
+      code: "ORCHESTRATOR_PERSISTENCE_FAILED",
+      stage: options.stage,
+      cause: options.cause,
+    });
+    this.name = "ReactOrchestrationPersistenceError";
+    this.operation = options.operation;
+    this.completedWrites = [...options.completedWrites];
+    this.partialWritePossible = options.partialWritePossible;
   }
 }
