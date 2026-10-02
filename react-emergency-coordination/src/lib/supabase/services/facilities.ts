@@ -1,5 +1,6 @@
 import { FacilitySchema, type Facility } from "../../../domain/facility/schema";
 import { supabase } from "../client";
+import { normalizeDatabaseTimestamp } from "./timestamps";
 
 type FacilityDatabaseRow = {
   id: string;
@@ -34,7 +35,7 @@ function toFacility(row: FacilityDatabaseRow): Facility {
     totalCapacity: row.total_capacity,
     availableCapacity: row.available_capacity,
     capabilities: row.capabilities,
-    updatedAt: row.updated_at,
+    updatedAt: normalizeDatabaseTimestamp(row.updated_at),
   });
 }
 
