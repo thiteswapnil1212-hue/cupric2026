@@ -60,7 +60,23 @@ export const ResponsePlanningOutputSchema = z
         summary: boundedTextSchema,
         rationale: boundedTextSchema,
         priority: PlanPrioritySchema,
-        actions: z.array(ProposedPlanActionSchema).min(1).max(50),
+        actions: z
+          .array(ProposedPlanActionSchema)
+          .min(1)
+          .max(50)
+          .superRefine((actions, context) => {
+            const seenSequences = new Set<number>();
+            for (const [index, action] of actions.entries()) {
+              if (seenSequences.has(action.sequence)) {
+                context.addIssue({
+                  code: "custom",
+                  path: [index, "sequence"],
+                  message: "Proposed action sequences must be unique.",
+                });
+              }
+              seenSequences.add(action.sequence);
+            }
+          }),
       })
       .strict(),
     alternatives: z.array(AlternativeRecommendationSchema).max(5),
@@ -68,20 +84,7 @@ export const ResponsePlanningOutputSchema = z
     reasoning: boundedTextSchema.max(2000),
     confidence: z.number().min(0).max(1),
   })
-  .strict()
-  .superRefine((output, context) => {
-    const seenSequences = new Set<number>();
-    output.primaryPlan.actions.forEach((action, index) => {
-      if (seenSequences.has(action.sequence)) {
-        context.addIssue({
-          code: "custom",
-          path: ["primaryPlan", "actions", index, "sequence"],
-          message: "Primary action sequences must be unique.",
-        });
-      }
-      seenSequences.add(action.sequence);
-    });
-  });
+  .strict();
 
 export type ProposedPlanAction = z.infer<typeof ProposedPlanActionSchema>;
 export type AlternativeRecommendation = z.infer<
