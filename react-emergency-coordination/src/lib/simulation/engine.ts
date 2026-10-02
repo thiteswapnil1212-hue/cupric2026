@@ -51,10 +51,6 @@ type ActionExecution = {
   readonly after: readonly SimulationEntityState[];
 };
 
-function compareActions(left: PlanAction, right: PlanAction): number {
-  return left.sequence - right.sequence || left.id.localeCompare(right.id);
-}
-
 function executionTimestamp(state: EmergencyState, plan: ResponsePlan): string {
   return Date.parse(state.updatedAt) >= Date.parse(plan.updatedAt)
     ? state.updatedAt
@@ -322,7 +318,11 @@ function executeAction(
     resources,
     facilities,
     routes: [...state.routes],
-    planActions: state.planActions,
+    planActions: state.planActions.map((entry) =>
+      entry.id === action.id
+        ? { ...entry, status: "COMPLETED" as const, updatedAt: timestamp }
+        : entry,
+    ),
   };
   return {
     working: afterWorking,
