@@ -1,6 +1,6 @@
 import type { ResourceRoutingAssessment } from "../agents/resource-routing/schema";
 import type { RiskAssessment } from "../agents/risk-assessment/schema";
-import type { ResponsePlanningResult } from "../agents/response-planning/agent";
+import type { ResponsePlanningResult } from "../agents/response-planning/types";
 import type { ReactAgentStage, OrchestratorStageTiming } from "./schema";
 
 type StageTiming = Omit<OrchestratorStageTiming, "stage">;

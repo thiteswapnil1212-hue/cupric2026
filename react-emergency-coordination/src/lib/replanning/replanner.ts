@@ -11,10 +11,7 @@ import type { RiskAssessment } from "../agents/risk-assessment/schema";
 import { detectEmergencyStateChanges } from "../change-detection/detector";
 import type { ChangeDetectionSuccess } from "../change-detection/schema";
 import { validateEmergencyStateConsistency } from "../emergency-state/consistency";
-import {
-  runReactAgentPipeline,
-  type ReactOrchestrationAgents,
-} from "../orchestrator/pipeline";
+import { runReactAgentPipeline, type ReactOrchestrationAgents } from "../orchestrator/pipeline";
 import { validatePlan, type PlanValidationResult } from "../emergency-engine/plan-validator";
 import {
   replanningError,

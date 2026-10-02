@@ -17,7 +17,6 @@ import {
 import { validateEmergencyStateConsistency } from "../../emergency-state/consistency";
 import {
   validatePlan,
-  type PlanValidationResult,
 } from "../../emergency-engine/plan-validator";
 import {
   ResourceRoutingAssessmentSchema,
@@ -29,10 +28,11 @@ import {
 } from "../risk-assessment/schema";
 import {
   ResponsePlanningOutputSchema,
-  type AlternativeRecommendation,
   type ProposedPlanAction,
   type ResponsePlanningOutput,
 } from "./schema";
+import type { ResponsePlanningAlternative, ResponsePlanningResult } from "./types";
+export type { ResponsePlanningAlternative, ResponsePlanningResult } from "./types";
 
 const responsePlanningSystemInstruction = `You are the Response Planning Agent in REACT.
 
@@ -80,20 +80,6 @@ export class ResponsePlanningAgentError extends Error {
     this.issues = issues;
   }
 }
-
-export type ResponsePlanningAlternative = AlternativeRecommendation & {
-  id: string;
-};
-
-export type ResponsePlanningResult = {
-  plan: ResponsePlan;
-  actions: readonly PlanAction[];
-  alternatives: readonly ResponsePlanningAlternative[];
-  constraints: readonly string[];
-  reasoning: string;
-  confidence: number;
-  validation: PlanValidationResult;
-};
 
 type ResponsePlanningFacts = {
   stateVersion: number;
