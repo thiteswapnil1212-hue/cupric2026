@@ -11,6 +11,11 @@ import {
   replanEmergencyResponse,
   type ReplanningAgents,
 } from "../src/lib/replanning/replanner";
+import {
+  persistReplanningResult,
+  ReplanningPersistenceError,
+  type ReplanningPersistenceDependencies,
+} from "../src/lib/replanning/persistence";
 
 const timestamp = "2026-01-01T00:00:00.000Z";
 
@@ -360,7 +365,44 @@ async function main(): Promise<void> {
   assert.notEqual(successful.revisedPlan?.id, oldPlan.id);
   assert.equal(successful.revisedPlan?.stateVersion, current.stateVersion);
   assert.equal(successful.revisedPlan?.status, "PENDING_APPROVAL");
+  assert.equal(successful.revisedPlanActions?.length, successful.revisedPlan?.actions.length);
   assert.deepEqual(oldPlan, originalPlan);
+
+  const persistenceWrites: string[] = [];
+  const persistenceDependencies: ReplanningPersistenceDependencies = {
+    getStateVersion: async () => current.stateVersion,
+    getPlan: async (planId) => planId === oldPlan.id ? oldPlan : null,
+    createPlan: async (plan) => { persistenceWrites.push(`plan:${plan.id}`); },
+    createPlanAction: async (planAction) => {
+      persistenceWrites.push(`action:${planAction.id}`);
+    },
+    updatePlan: async (planId, _expectedStatus, status) => {
+      persistenceWrites.push(`status:${planId}:${status}`);
+      return { ...oldPlan, status };
+    },
+    createStateChange: async (stateChange) => {
+      persistenceWrites.push(`change:${stateChange.id}`);
+    },
+  };
+  const persistedReplanning = await persistReplanningResult(
+    successful,
+    persistenceDependencies,
+  );
+  assert.equal(persistedReplanning.previousPlanSupersessionPersisted, true);
+  assert.ok(persistenceWrites.includes(`plan:${successful.revisedPlan!.id}`));
+  assert.ok(persistenceWrites.includes(`status:${oldPlan.id}:SUPERSEDED`));
+  assert.ok(persistenceWrites.some((write) => write.startsWith("action:")));
+
+  const stalePersistenceDependencies: ReplanningPersistenceDependencies = {
+    ...persistenceDependencies,
+    getStateVersion: async () => current.stateVersion + 1,
+  };
+  await assert.rejects(
+    persistReplanningResult(successful, stalePersistenceDependencies),
+    (error: unknown) =>
+      error instanceof ReplanningPersistenceError &&
+      error.code === "STATE_VERSION_CONFLICT",
+  );
 
   assert.equal(
     successful.revisedPlan === null ||
