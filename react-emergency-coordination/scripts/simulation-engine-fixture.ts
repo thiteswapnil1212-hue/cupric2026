@@ -233,7 +233,7 @@ const unavailable = executeApprovedPlan(
   approvedPlan,
 );
 assert.equal(unavailable.success, false);
-if (!unavailable.success) assert.equal(unavailable.error.code, "PLAN_INVALID");
+if (!unavailable.success) assert.equal(unavailable.error.code, "RESOURCE_EXECUTION_FAILED");
 
 const insufficient = executeApprovedPlan(
   {
@@ -246,7 +246,7 @@ const insufficient = executeApprovedPlan(
   approvedPlan,
 );
 assert.equal(insufficient.success, false);
-if (!insufficient.success) assert.equal(insufficient.error.code, "PLAN_INVALID");
+if (!insufficient.success) assert.equal(insufficient.error.code, "FACILITY_EXECUTION_FAILED");
 
 const blockedAction = action("blocked-action", 1, {
   routeIds: ["route-blocked"],
@@ -256,7 +256,7 @@ const blocked = executeApprovedPlan(
   plan([blockedAction]),
 );
 assert.equal(blocked.success, false);
-if (!blocked.success) assert.equal(blocked.error.code, "PLAN_INVALID");
+if (!blocked.success) assert.equal(blocked.error.code, "ROUTE_EXECUTION_FAILED");
 
 const partialAction = action("partial-action", 1, {
   routeIds: ["route-partial"],
