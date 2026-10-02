@@ -48,6 +48,7 @@ export const PlanActionSchema = z
     resourceIds: z.array(nonEmptyStringSchema),
     facilityIds: z.array(nonEmptyStringSchema),
     routeIds: z.array(nonEmptyStringSchema),
+    capacityDemand: z.number().int().positive().nullable().optional(),
     targetLocation: PlanActionTargetLocationSchema.nullable(),
     estimatedDurationMinutes: z.number().finite().nonnegative(),
     createdAt: z.iso.datetime(),
@@ -63,6 +64,15 @@ export const PlanActionSchema = z
     {
       message: "A plan action must reference at least one execution target.",
       path: ["resourceIds"],
+    },
+  )
+  .refine(
+    (action) =>
+      action.type !== "SHELTER_PEOPLE" ||
+      (action.capacityDemand !== undefined && action.capacityDemand !== null),
+    {
+      message: "SHELTER_PEOPLE actions require a positive capacityDemand.",
+      path: ["capacityDemand"],
     },
   );
 
