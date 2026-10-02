@@ -1,5 +1,6 @@
 import { ResourceSchema, type Resource } from "../../../domain/resource/schema";
 import { supabase } from "../client";
+import { normalizeDatabaseTimestamp } from "./timestamps";
 
 type ResourceDatabaseRow = {
   id: string;
@@ -32,7 +33,7 @@ function toResource(row: ResourceDatabaseRow): Resource {
     capacity: row.capacity,
     currentAssignmentId: row.current_assignment_id,
     capabilities: row.capabilities,
-    updatedAt: row.updated_at,
+    updatedAt: normalizeDatabaseTimestamp(row.updated_at),
   });
 }
 
