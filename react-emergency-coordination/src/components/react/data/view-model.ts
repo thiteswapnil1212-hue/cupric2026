@@ -6,6 +6,12 @@ import type { ResponsePlan } from "../../../domain/response-plan/schema";
 import type { RouteStatus } from "../../../domain/route/schema";
 import type { StateChange } from "../../../domain/state-change/schema";
 import type { DemoStateSnapshot } from "../../../lib/demo/fixtures";
+import type { DemoSnapshot } from "../../../lib/demo/schema";
+import type { PlanValidationResult } from "../../../lib/emergency-engine/plan-validator";
+import type { HumanDecision } from "../../../domain/human-decision/schema";
+import type { ResourceRoutingAssessment } from "../../../lib/agents/resource-routing/schema";
+import type { RiskAssessment } from "../../../lib/agents/risk-assessment/schema";
+import type { ResponsePlanningResult } from "../../../lib/agents/response-planning/types";
 
 export type StatusTone = "green" | "blue" | "amber" | "red" | "gray";
 
@@ -50,6 +56,10 @@ export type DashboardAgent = {
   statusLabel: string;
   timeLabel: string;
   tone: StatusTone;
+  purpose: string;
+  durationLabel: string;
+  resultSummary: string;
+  affectedPlan: boolean;
 };
 
 export type DashboardTimelineItem = {
@@ -76,6 +86,12 @@ export type DashboardViewModel = {
     routeId: string | null;
     revisedPlanId: string | null;
   };
+  riskAssessment: RiskAssessment | null;
+  resourceRoutingAssessment: ResourceRoutingAssessment | null;
+  responsePlanningResult: ResponsePlanningResult | null;
+  validation: PlanValidationResult | null;
+  humanDecision: HumanDecision | null;
+  previousPlan: ResponsePlan | null;
 };
 
 const agentLabels: Record<AgentType, string> = {
@@ -109,6 +125,30 @@ function timeLabel(value: string): string {
   return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 }
 
+const agentPurposes: Record<AgentType, string> = {
+  RISK_ASSESSMENT: "Evaluates severity, hazards, and population impact.",
+  RESOURCE_ROUTING: "Checks resources, facilities, and route feasibility.",
+  RESPONSE_PLANNING: "Builds an executable response recommendation.",
+};
+
+function agentSummary(run: AgentRun): string {
+  if (run.status !== "COMPLETED" || run.output === null) return run.errorMessage ?? "DATA UNAVAILABLE";
+  if (run.agentType === "RISK_ASSESSMENT") return "Risk factors and priority assessed.";
+  if (run.agentType === "RESOURCE_ROUTING") return "Resource, facility, and route feasibility assessed.";
+  return "Response plan recommendation generated.";
+}
+
+function runsForSnapshot(snapshot: DemoStateSnapshot | DemoSnapshot): readonly AgentRun[] {
+  if (!("stage" in snapshot)) return snapshot.agentRuns;
+  if (snapshot.stage === "IDLE") {
+    return snapshot.agentRuns.map((run) => ({ ...run, status: "PENDING", completedAt: null, durationMs: null, output: null }));
+  }
+  if (snapshot.stage === "EMERGENCY_INITIALIZED" || snapshot.stage === "ANALYZING" || snapshot.stage === "REASSESSING") {
+    return snapshot.agentRuns.map((run) => ({ ...run, status: "RUNNING", completedAt: null, durationMs: null, output: null }));
+  }
+  return snapshot.agentRuns;
+}
+
 function actionForPlan(state: EmergencyState, plan: ResponsePlan | null): DashboardAction[] {
   if (plan === null) return [];
   return plan.actions
@@ -131,9 +171,10 @@ function toTimeline(changes: readonly StateChange[]): DashboardTimelineItem[] {
 }
 
 export function createDashboardViewModel(
-  snapshot: DemoStateSnapshot,
+  snapshot: DemoStateSnapshot | DemoSnapshot,
 ): DashboardViewModel {
-  const { state, agentRuns, stateChanges } = snapshot;
+  const { state, stateChanges } = snapshot;
+  const agentRuns = runsForSnapshot(snapshot);
   const plan = state.activePlan;
   const changedRoute = state.routes.find((route) => route.status !== "OPEN");
   return {
@@ -176,6 +217,10 @@ export function createDashboardViewModel(
       statusLabel: titleCase(run.status),
       timeLabel: timeLabel(run.completedAt ?? run.startedAt),
       tone: run.status === "COMPLETED" ? "green" : run.status === "RUNNING" ? "amber" : "red",
+      purpose: agentPurposes[run.agentType],
+      durationLabel: run.durationMs === null ? "Duration unavailable" : `${run.durationMs} ms`,
+      resultSummary: agentSummary(run),
+      affectedPlan: run.agentType === "RESPONSE_PLANNING" || run.status === "COMPLETED",
     })),
     timeline: toTimeline(stateChanges),
     reassessment: {
@@ -183,5 +228,11 @@ export function createDashboardViewModel(
       routeId: changedRoute?.id ?? null,
       revisedPlanId: changedRoute === undefined ? null : plan?.id ?? null,
     },
+    riskAssessment: "riskAssessment" in snapshot ? snapshot.riskAssessment : null,
+    resourceRoutingAssessment: "resourceRoutingAssessment" in snapshot ? snapshot.resourceRoutingAssessment : null,
+    responsePlanningResult: "responsePlanningResult" in snapshot ? snapshot.responsePlanningResult : null,
+    validation: "validation" in snapshot ? snapshot.validation : null,
+    humanDecision: "humanDecision" in snapshot ? snapshot.humanDecision : null,
+    previousPlan: "previousPlan" in snapshot ? snapshot.previousPlan : null,
   };
 }
