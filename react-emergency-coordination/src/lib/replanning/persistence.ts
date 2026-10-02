@@ -1,5 +1,10 @@
 import type { ResponsePlan } from "../../domain/response-plan/schema";
 import type { StateChange } from "../../domain/state-change/schema";
+import type { EmergencyState } from "../../domain/emergency-state/schema";
+import {
+  replanEmergencyResponse,
+  type ReplanningOptions,
+} from "./replanner";
 import type { ReplanningResult } from "./schema";
 
 export type ReplanningPersistenceDependencies = {
@@ -234,4 +239,19 @@ export async function persistReplanningResult(
   }
 
   return { ...result, previousPlanSupersessionPersisted: true };
+}
+
+export async function replanAndPersistEmergencyResponse(
+  previousState: EmergencyState,
+  currentState: EmergencyState,
+  options: ReplanningOptions = {},
+  injectedDependencies?: ReplanningPersistenceDependencies,
+): Promise<ReplanningResult> {
+  const result = await replanEmergencyResponse(
+    previousState,
+    currentState,
+    options,
+  );
+  if (result.status !== "PENDING_HUMAN_APPROVAL") return result;
+  return persistReplanningResult(result, injectedDependencies);
 }
