@@ -9,10 +9,18 @@ import {
   listResources,
   listRoutes,
 } from "../supabase/services";
-import { initializeEmergencyStateVersion } from "../supabase/services/emergency-states";
+import {
+  getEmergencyStateVersion,
+  initializeEmergencyStateVersion,
+} from "../supabase/services/emergency-states";
+
+export type LoadEmergencyStateOptions = {
+  initializeMissingVersion?: boolean;
+};
 
 export async function loadEmergencyState(
   incidentId: string,
+  options: LoadEmergencyStateOptions = {},
 ): Promise<EmergencyState> {
   if (typeof incidentId !== "string" || incidentId.trim().length === 0) {
     throw new TypeError("incidentId must be a non-empty string.");
@@ -26,9 +34,21 @@ export async function loadEmergencyState(
     throw new Error(`Loaded incident does not match requested id: ${incidentId}`);
   }
 
+  const stateVersionPromise =
+    options.initializeMissingVersion === false
+      ? getEmergencyStateVersion(incidentId).then((stateVersion) => {
+          if (stateVersion === null) {
+            throw new Error(
+              `Emergency state version is not initialized for incident ${incidentId}.`,
+            );
+          }
+          return stateVersion;
+        })
+      : initializeEmergencyStateVersion(incidentId);
+
   const [stateVersion, resources, facilities, routes, activePlanRecord] =
     await Promise.all([
-      initializeEmergencyStateVersion(incidentId),
+      stateVersionPromise,
       listResources(),
       listFacilities(),
       listRoutes(),
