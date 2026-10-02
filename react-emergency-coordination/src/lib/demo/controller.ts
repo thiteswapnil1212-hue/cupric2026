@@ -2,7 +2,9 @@ import type { EmergencyState } from "../../domain/emergency-state/schema";
 import type { PlanAction } from "../../domain/plan-action/schema";
 import type { ResponsePlan } from "../../domain/response-plan/schema";
 import type { StateChange } from "../../domain/state-change/schema";
+import type { AgentType } from "../../domain/agent-run/schema";
 import { validatePlan } from "../emergency-engine/plan-validator";
+import { transitionRouteStatus } from "../emergency-engine/routes";
 import { detectEmergencyStateChanges } from "../change-detection/detector";
 import {
   approvePlan,
@@ -25,8 +27,15 @@ const demoTimes = {
   revisedExecuted: "2026-10-02T08:49:00.000Z",
 } as const;
 
-function operationError(stage: DemoStage, code: string, message: string): DemoError {
-  return { stage, code, message, recovery: stage === "FAILED" ? "RESET" : "RETRY" };
+function operationError(stage: DemoStage, code: string, message: string, occurredAt: string): DemoError {
+  return { stage, code, message, recovery: "RESET", recoverable: false, occurredAt };
+}
+
+function agentError(error: unknown): { code: string; message: string } {
+  if (error instanceof Error && "code" in error && typeof error.code === "string") {
+    return { code: error.code, message: error.message };
+  }
+  return { code: "AGENT_EXECUTION_FAILED", message: "Agent workflow failed. No plan was advanced." };
 }
 
 function decisionMetadata(plan: ResponsePlan, reason: string): DecisionMetadata {
@@ -92,13 +101,15 @@ function createPlanResult(
   };
 }
 
-type DemoAgents = {
+export type DemoAgents = {
   riskAssessment: (state: EmergencyState) => Promise<RiskAssessment>;
   resourceRouting: (state: EmergencyState) => Promise<ResourceRoutingAssessment>;
   responsePlanning: (state: EmergencyState) => Promise<ResponsePlanningResult>;
 };
 
-function deterministicAgents(planId: string): DemoAgents {
+export type DemoAgentFactory = (planId: string) => DemoAgents;
+
+export function deterministicDemoAgents(planId: string): DemoAgents {
   return {
     riskAssessment: async (state): Promise<RiskAssessment> => ({
       severity: state.incident.severity,
@@ -227,7 +238,7 @@ function initialSnapshot(): DemoSnapshot {
   const fixture = getDemoState("initial");
   return {
     stage: "IDLE",
-    state: fixture.state,
+    state: { ...fixture.state, activePlan: null },
     agentRuns: fixture.agentRuns,
     stateChanges: [],
     currentPlan: null,
@@ -245,6 +256,8 @@ function initialSnapshot(): DemoSnapshot {
 export class DemoController {
   private snapshot: DemoSnapshot = initialSnapshot();
 
+  constructor(private readonly agentFactory: DemoAgentFactory = deterministicDemoAgents) {}
+
   getSnapshot(): DemoSnapshot {
     return this.snapshot;
   }
@@ -254,17 +267,39 @@ export class DemoController {
     return { success: true, snapshot: this.snapshot };
   }
 
+  captureUnexpectedFailure(error: unknown): DemoOperationResult {
+    const failure = agentError(error);
+    return this.fail(this.snapshot.stage, failure.code, failure.message);
+  }
+
   async startDemo(): Promise<DemoOperationResult> {
+    if (this.snapshot.stage !== "IDLE") return this.fail(this.snapshot.stage, "INVALID_TRANSITION", "Reset the demo before starting a new run.");
     const fixture = getDemoState("initial");
-    this.snapshot = { ...this.snapshot, stage: "EMERGENCY_INITIALIZED", state: fixture.state, agentRuns: fixture.agentRuns, stateChanges: [changeRecord("DEMO-001", "INCIDENT", fixture.state.incident.id, "CREATED", "Emergency detected", null, "ACTIVE", fixture.state.incident.reportedAt)], progress: { current: 1, total: 9, label: "Emergency initialized" }, error: null };
-    const agents = deterministicAgents("PLAN-001");
-    const riskAssessment = await agents.riskAssessment(fixture.state);
-    const resourceRoutingAssessment = await agents.resourceRouting(fixture.state);
-    const generated = await agents.responsePlanning(fixture.state);
-    if (!generated.validation.valid) return this.fail("PLAN_GENERATED", "PLAN_VALIDATION_FAILED", generated.validation.errors.map((issue) => issue.message).join(" "));
+    const initialState: EmergencyState = { ...fixture.state, activePlan: null };
+    this.snapshot = { ...this.snapshot, stage: "EMERGENCY_INITIALIZED", state: initialState, agentRuns: fixture.agentRuns, stateChanges: [changeRecord("DEMO-001", "INCIDENT", initialState.incident.id, "CREATED", "Emergency detected", null, "ACTIVE", initialState.incident.reportedAt)], progress: { current: 1, total: 9, label: "Emergency initialized" }, error: null };
+    let riskAssessment: RiskAssessment;
+    let resourceRoutingAssessment: ResourceRoutingAssessment;
+    let generated: ResponsePlanningResult;
+    let activeAgent: AgentType = "RISK_ASSESSMENT";
+    try {
+      const agents = this.agentFactory("PLAN-001");
+      riskAssessment = await agents.riskAssessment(initialState);
+      activeAgent = "RESOURCE_ROUTING";
+      resourceRoutingAssessment = await agents.resourceRouting(initialState);
+      activeAgent = "RESPONSE_PLANNING";
+      generated = await agents.responsePlanning(initialState);
+    } catch (error) {
+      const failure = agentError(error);
+      this.markAgentFailure(activeAgent, failure.message);
+      return this.fail("ANALYZING", failure.code, failure.message);
+    }
+    if (!generated.validation.valid) {
+      this.snapshot = { ...this.snapshot, riskAssessment, resourceRoutingAssessment, responsePlanningResult: generated, validation: generated.validation };
+      return this.fail("PLAN_GENERATED", "PLAN_VALIDATION_FAILED", generated.validation.errors.map((issue) => `${issue.code}: ${issue.message}`).join(" "));
+    }
     const submitted = submitPlanForApproval(generated.plan);
     if (!submitted.success) return this.fail("PLAN_GENERATED", submitted.error.code, submitted.error.message);
-    this.snapshot = { ...this.snapshot, stage: "AWAITING_APPROVAL", currentPlan: submitted.plan, state: { ...fixture.state, activePlan: submitted.plan }, riskAssessment, resourceRoutingAssessment, responsePlanningResult: generated, validation: generated.validation, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-002", "PLAN", submitted.plan.id, "CREATED", "Response Plan-001 generated", null, "PENDING_APPROVAL", demoTimes.initialPlan)], progress: { current: 2, total: 9, label: "Human authorization required" } };
+    this.snapshot = { ...this.snapshot, stage: "AWAITING_APPROVAL", currentPlan: submitted.plan, state: { ...initialState, activePlan: submitted.plan }, riskAssessment, resourceRoutingAssessment, responsePlanningResult: generated, validation: generated.validation, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-002", "PLAN", submitted.plan.id, "CREATED", "Response Plan-001 generated", null, "PENDING_APPROVAL", demoTimes.initialPlan)], progress: { current: 2, total: 9, label: "Human authorization required" } };
     return { success: true, snapshot: this.snapshot };
   }
 
@@ -292,17 +327,24 @@ export class DemoController {
   }
 
   modifyCurrentPlan(): DemoOperationResult {
-    const error = operationError(this.snapshot.stage, "MODIFICATION_REQUIRES_PLAN_INPUT", "Demo modification requires a concrete modified ResponsePlan.");
-    this.snapshot = { ...this.snapshot, error };
-    return { success: false, snapshot: this.snapshot, error };
+    return this.fail(
+      this.snapshot.stage,
+      "MODIFICATION_REQUIRES_PLAN_INPUT",
+      "Demo modification requires a concrete modified ResponsePlan.",
+    );
   }
 
   async simulateRouteBlockage(): Promise<DemoOperationResult> {
     if (this.snapshot.stage !== "COMPLETED" || this.snapshot.currentPlan?.id !== "PLAN-001") return this.fail(this.snapshot.stage, "INVALID_TRANSITION", "R1 blockage can only be simulated after Plan-001 execution.");
     const previousState = this.snapshot.state;
+    const primaryRoute = previousState.routes.find((route) => route.id === "R1");
+    if (primaryRoute === undefined) return this.fail("SITUATION_CHANGED", "ROUTE_NOT_FOUND", "Primary route R1 is not present in the current emergency state.");
+    const transitionedRoute = transitionRouteStatus(primaryRoute, "BLOCKED", "Flooding reported on primary access route.");
+    const blockedRoute = transitionedRoute.route;
+    if (!transitionedRoute.valid || blockedRoute === null) return this.fail("SITUATION_CHANGED", transitionedRoute.errors[0]?.code ?? "ROUTE_TRANSITION_FAILED", transitionedRoute.errors[0]?.message ?? "Route R1 could not be blocked.");
     const currentState: EmergencyState = {
       ...previousState,
-      routes: previousState.routes.map((route) => route.id === "R1" ? { ...route, status: "BLOCKED", blockedReason: "Flooding reported on primary access route.", updatedAt: demoTimes.blockage } : route),
+      routes: previousState.routes.map((route) => route.id === "R1" ? { ...blockedRoute, updatedAt: demoTimes.blockage } : route),
       stateVersion: previousState.stateVersion + 1,
       updatedAt: demoTimes.blockage,
     };
@@ -311,11 +353,26 @@ export class DemoController {
     if (detection.success === false) return this.fail("CHANGE_DETECTED", "CHANGE_DETECTION_FAILED", detection.error.message);
     if (detection.classification !== "PLAN_AFFECTED_REASSESSMENT_REQUIRED") return this.fail("CHANGE_DETECTED", "UNEXPECTED_CHANGE_CLASSIFICATION", detection.reason);
     this.snapshot = { ...this.snapshot, stage: "REASSESSING", progress: { current: 6, total: 9, label: "Plan dependency affected · reassessing" } };
-    const agents = deterministicAgents("PLAN-002");
-    const riskAssessment = await agents.riskAssessment(currentState);
-    const resourceRoutingAssessment = await agents.resourceRouting(currentState);
-    const revised = await agents.responsePlanning(currentState);
-    if (!revised.validation.valid) return this.fail("REASSESSING", "PLAN_VALIDATION_FAILED", revised.validation.errors.map((issue) => issue.message).join(" "));
+    let riskAssessment: RiskAssessment;
+    let resourceRoutingAssessment: ResourceRoutingAssessment;
+    let revised: ResponsePlanningResult;
+    let activeAgent: AgentType = "RISK_ASSESSMENT";
+    try {
+      const agents = this.agentFactory("PLAN-002");
+      riskAssessment = await agents.riskAssessment(currentState);
+      activeAgent = "RESOURCE_ROUTING";
+      resourceRoutingAssessment = await agents.resourceRouting(currentState);
+      activeAgent = "RESPONSE_PLANNING";
+      revised = await agents.responsePlanning(currentState);
+    } catch (error) {
+      const failure = agentError(error);
+      this.markAgentFailure(activeAgent, failure.message);
+      return this.fail("REASSESSING", failure.code, failure.message);
+    }
+    if (!revised.validation.valid) {
+      this.snapshot = { ...this.snapshot, riskAssessment, resourceRoutingAssessment, responsePlanningResult: revised, validation: revised.validation };
+      return this.fail("REASSESSING", "PLAN_VALIDATION_FAILED", revised.validation.errors.map((issue) => `${issue.code}: ${issue.message}`).join(" "));
+    }
     const revisedPlan = submitPlanForApproval(revised.plan);
     if (!revisedPlan.success) return this.fail("REASSESSING", revisedPlan.error.code, revisedPlan.error.message);
     this.snapshot = { ...this.snapshot, stage: "AWAITING_REVISED_APPROVAL", state: { ...currentState, planActions: [...currentState.planActions, ...revised.actions], activePlan: revisedPlan.plan }, currentPlan: revisedPlan.plan, previousPlan: this.snapshot.currentPlan, riskAssessment, resourceRoutingAssessment, responsePlanningResult: revised, validation: revised.validation, humanDecision: null, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-PLAN-002", "PLAN", revisedPlan.plan.id, "CREATED", "Response Plan-002 generated", null, "PENDING_APPROVAL", demoTimes.revisedPlan)], progress: { current: 7, total: 9, label: "Revised plan ready · human authorization required" }, error: null };
@@ -323,26 +380,35 @@ export class DemoController {
   }
 
   retryDemo(): Promise<DemoOperationResult> {
+    if (this.snapshot.stage !== "IDLE") return Promise.resolve(this.fail(this.snapshot.stage, "RESET_REQUIRED", "Reset the demo before retrying a failed workflow."));
     return this.startDemo();
   }
 
-  private revisedActions(state: EmergencyState): PlanAction[] {
-    const routeId = state.routes.find((route) => route.status === "OPEN")?.id ?? "R2";
-    return [
-      { ...state.planActions[0], id: "ACT-101", planId: "PLAN-002", sequence: 1, description: "Continue rescue operations with Rescue Team Bravo", resourceIds: ["RES-RT-02"], routeIds: [routeId], status: "PENDING", createdAt: demoTimes.revisedPlan, updatedAt: demoTimes.revisedPlan },
-      { ...state.planActions[1], id: "ACT-102", planId: "PLAN-002", sequence: 2, description: "Reroute Ambulance 08 via R2", resourceIds: ["RES-AMB-02"], routeIds: [routeId], status: "PENDING", createdAt: demoTimes.revisedPlan, updatedAt: demoTimes.revisedPlan },
-      { ...state.planActions[2], id: "ACT-103", planId: "PLAN-002", sequence: 3, description: "Adjust Hospital A allocation", resourceIds: [], facilityIds: ["FAC-HOSP-A"], routeIds: [], capacityDemand: 4, status: "PENDING", createdAt: demoTimes.revisedPlan, updatedAt: demoTimes.revisedPlan },
-      { ...state.planActions[3], id: "ACT-104", planId: "PLAN-002", sequence: 4, description: "Maintain Hospital B standby allocation", resourceIds: [], facilityIds: ["FAC-HOSP-B"], routeIds: [], capacityDemand: 2, status: "PENDING", createdAt: demoTimes.revisedPlan, updatedAt: demoTimes.revisedPlan },
-    ];
+  private markAgentFailure(agentType: AgentType, message: string): void {
+    this.snapshot = {
+      ...this.snapshot,
+      agentRuns: this.snapshot.agentRuns.map((run) =>
+        run.agentType === agentType
+          ? {
+              ...run,
+              status: "FAILED",
+              completedAt: this.snapshot.state.updatedAt,
+              durationMs: 0,
+              output: null,
+              errorMessage: message,
+            }
+          : run,
+      ),
+    };
   }
 
   private fail(stage: DemoStage, code: string, message: string): DemoOperationResult {
-    const error = operationError("FAILED", code, message);
+    const error = operationError(stage, code, message, this.snapshot.state.updatedAt);
     this.snapshot = { ...this.snapshot, stage: "FAILED", progress: { ...this.snapshot.progress, label: "Demo failed" }, error };
     return { success: false, snapshot: this.snapshot, error };
   }
 }
 
-export function createDemoController(): DemoController {
-  return new DemoController();
+export function createDemoController(agentFactory?: DemoAgentFactory): DemoController {
+  return new DemoController(agentFactory);
 }
