@@ -143,7 +143,7 @@ export async function runReactAgentPipeline<State>(
     () => agents.riskAssessment(state),
     observer,
   );
-  if (!risk.success) {
+  if (risk.success === false) {
     return {
       success: false,
       failure: {
@@ -179,7 +179,7 @@ export async function runReactAgentPipeline<State>(
     () => agents.resourceRouting(state),
     observer,
   );
-  if (!routing.success) {
+  if (routing.success === false) {
     return {
       success: false,
       failure: {
@@ -216,7 +216,7 @@ export async function runReactAgentPipeline<State>(
       agents.responsePlanning(state, risk.value, routing.value),
     observer,
   );
-  if (!planning.success) {
+  if (planning.success === false) {
     return {
       success: false,
       failure: {
