@@ -60,6 +60,8 @@ export const ResponsePlanningResultSchema =
 export const OrchestratorStageTimingSchema = z
   .object({
     stage: ReactAgentStageSchema,
+    startedAt: z.iso.datetime().optional(),
+    completedAt: z.iso.datetime().optional(),
     durationMs: z.number().finite().nonnegative(),
   })
   .strict();
