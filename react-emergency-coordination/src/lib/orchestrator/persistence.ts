@@ -45,6 +45,7 @@ import {
   ReactOrchestrationInputError,
   ReactOrchestrationOutputError,
   ReactOrchestrationPersistenceError,
+  ReactOrchestrationStageError,
 } from "./errors";
 import {
   runReactOrchestration,
@@ -54,6 +55,7 @@ import {
 } from "./orchestrator";
 import {
   ReactOrchestrationResultSchema,
+  type ReactAgentStage,
   type ReactOrchestrationResult,
 } from "./schema";
 
@@ -69,6 +71,31 @@ const stageAgentTypes: Record<OrchestrationStageCompletedEvent["stage"], AgentTy
   "resource-routing": "RESOURCE_ROUTING",
   "response-planning": "RESPONSE_PLANNING",
 };
+
+const timeoutAgentCodes = new Set([
+  "RISK_ASSESSMENT_GEMINI_TIMEOUT",
+  "RESOURCE_ROUTING_GEMINI_TIMEOUT",
+  "RESPONSE_PLANNING_GEMINI_TIMEOUT",
+]);
+
+const invalidOutputAgentCodes = new Set([
+  "RISK_ASSESSMENT_INVALID_STRUCTURED_OUTPUT",
+  "RISK_ASSESSMENT_SCHEMA_VALIDATION_FAILED",
+  "RISK_ASSESSMENT_FACT_CONFLICT",
+  "RESOURCE_ROUTING_INVALID_STRUCTURED_OUTPUT",
+  "RESOURCE_ROUTING_SCHEMA_VALIDATION_FAILED",
+  "RESOURCE_ROUTING_FACT_CONFLICT",
+  "RESOURCE_ROUTING_UNKNOWN_RESOURCE",
+  "RESOURCE_ROUTING_UNKNOWN_FACILITY",
+  "RESOURCE_ROUTING_UNKNOWN_ROUTE",
+  "RESOURCE_ROUTING_DUPLICATE_REFERENCE",
+  "RESPONSE_PLANNING_ASSESSMENT_INVALID",
+  "RESPONSE_PLANNING_FACT_CONFLICT",
+  "RESPONSE_PLANNING_INVALID_STRUCTURED_OUTPUT",
+  "RESPONSE_PLANNING_SCHEMA_VALIDATION_FAILED",
+  "RESPONSE_PLANNING_OUTPUT_INVALID",
+  "RESPONSE_PLANNING_PRIMARY_PLAN_INVALID",
+]);
 
 function stableAgentRunId(
   incidentId: string,
@@ -104,15 +131,8 @@ function getAgentErrorCode(
 }
 
 function failedRunStatus(errorCode: string): AgentRunStatus {
-  if (errorCode.endsWith("_TIMEOUT")) return "TIMED_OUT";
-  if (
-    errorCode.includes("INVALID_STRUCTURED_OUTPUT") ||
-    errorCode.includes("SCHEMA_VALIDATION_FAILED") ||
-    errorCode.includes("FACT_CONFLICT") ||
-    errorCode.includes("OUTPUT_INVALID") ||
-    errorCode.includes("PRIMARY_PLAN_INVALID") ||
-    errorCode.includes("ASSESSMENT_INVALID")
-  ) {
+  if (timeoutAgentCodes.has(errorCode)) return "TIMED_OUT";
+  if (invalidOutputAgentCodes.has(errorCode)) {
     return "INVALID_OUTPUT";
   }
   return "FAILED";
@@ -120,7 +140,7 @@ function failedRunStatus(errorCode: string): AgentRunStatus {
 
 function outputForCompletedStage(
   event: OrchestrationStageCompletedEvent,
-): unknown {
+): NonNullable<AgentRun["output"]> {
   switch (event.stage) {
     case "risk-assessment":
       return RiskAssessmentSchema.parse(event.output);
@@ -143,7 +163,7 @@ function createCompletedAgentRun(
   event: OrchestrationStageCompletedEvent,
 ): AgentRun {
   const agentType = stageAgentTypes[event.stage];
-  return AgentRunSchema.parse({
+  return {
     id: stableAgentRunId(incidentId, stateVersion, agentType),
     incidentId,
     agentType,
@@ -154,7 +174,7 @@ function createCompletedAgentRun(
     durationMs: Math.round(event.timing.durationMs),
     output: outputForCompletedStage(event),
     errorMessage: null,
-  });
+  };
 }
 
 function createFailedAgentRun(
@@ -164,7 +184,7 @@ function createFailedAgentRun(
 ): AgentRun {
   const agentType = stageAgentTypes[event.stage];
   const errorCode = getAgentErrorCode(event.stage, event.cause);
-  return AgentRunSchema.parse({
+  return {
     id: stableAgentRunId(incidentId, stateVersion, agentType),
     incidentId,
     agentType,
@@ -175,13 +195,14 @@ function createFailedAgentRun(
     durationMs: Math.round(event.timing.durationMs),
     output: null,
     errorMessage: `${agentType} failed (${errorCode}).`,
-  });
+  };
 }
 
 function safeParseAgentRun(
   candidate: AgentRun,
   stage: OrchestrationStageFailedEvent["stage"],
   completedWrites: readonly string[],
+  completedStages: readonly ReactAgentStage[],
 ): AgentRun {
   const validation = AgentRunSchema.safeParse(candidate);
   if (!validation.success) {
@@ -192,6 +213,7 @@ function safeParseAgentRun(
       cause: validation.error,
       completedWrites,
       partialWritePossible: false,
+      completedStages,
     });
   }
   return validation.data;
@@ -237,6 +259,7 @@ async function persistAgentRun(
   run: AgentRun,
   stage: OrchestrationStageFailedEvent["stage"],
   savedRuns: AgentRun[],
+  completedStages: readonly ReactAgentStage[],
   failureCause?: unknown,
 ): Promise<void> {
   let insertAcknowledged = false;
@@ -255,6 +278,7 @@ async function persistAgentRun(
         cause,
         completedWrites: [...savedRuns.map((saved) => saved.id), run.id],
         partialWritePossible: false,
+        completedStages,
       });
     }
     savedRuns.push(validation.data);
@@ -276,6 +300,7 @@ async function persistAgentRun(
         ...(insertAcknowledged ? [run.id] : []),
       ],
       partialWritePossible: !insertAcknowledged,
+      completedStages,
     });
   }
 }
@@ -285,20 +310,29 @@ async function persistFailedAgentRun(
   stateVersion: number,
   event: OrchestrationStageFailedEvent,
   savedRuns: AgentRun[],
+  completedStages: readonly ReactAgentStage[],
 ): Promise<void> {
   const candidate = createFailedAgentRun(incidentId, stateVersion, event);
   const run = safeParseAgentRun(
     candidate,
     event.stage,
     savedRuns.map((saved) => saved.id),
+    completedStages,
   );
-  await persistAgentRun(run, event.stage, savedRuns, event.cause);
+  await persistAgentRun(
+    run,
+    event.stage,
+    savedRuns,
+    completedStages,
+    event.cause,
+  );
 }
 
 function createObserver(
   incidentId: string,
   stateVersion: number,
   savedRuns: AgentRun[],
+  completedStages: ReactAgentStage[],
 ): ReactOrchestrationObserver {
   return {
     onStageCompleted: async (event) => {
@@ -321,13 +355,24 @@ function createObserver(
           stateVersion,
           { stage: event.stage, cause: failure, timing: event.timing },
           savedRuns,
+          completedStages,
         );
         throw new ReactOrchestrationOutputError(
           "Response planning output did not preserve the input incident identity and state version.",
           issues,
+          undefined,
+          {
+            failureCategory: "RESPONSE_PLANNING_FAILED",
+            failedStage: "response-planning",
+            completedStages,
+            completedWrites: savedRuns.map((run) => run.id),
+            partialPersistence: savedRuns.length > 0,
+            recommendation: "REGENERATE_PLAN",
+          },
         );
       }
 
+      completedStages.push(event.stage);
       const candidate = createCompletedAgentRun(
         incidentId,
         stateVersion,
@@ -337,8 +382,9 @@ function createObserver(
         candidate,
         event.stage,
         savedRuns.map((saved) => saved.id),
+        completedStages,
       );
-      await persistAgentRun(run, event.stage, savedRuns);
+      await persistAgentRun(run, event.stage, savedRuns, completedStages);
     },
     onStageFailed: async (event) => {
       await persistFailedAgentRun(
@@ -346,6 +392,7 @@ function createObserver(
         stateVersion,
         event,
         savedRuns,
+        completedStages,
       );
     },
   };
@@ -358,6 +405,8 @@ function persistenceFailure(
   cause: unknown,
   completedWrites: readonly string[],
   partialWritePossible: boolean,
+  completedStages: readonly ReactAgentStage[] = [],
+  usablePlanExists = false,
 ): ReactOrchestrationPersistenceError {
   return new ReactOrchestrationPersistenceError({
     message,
@@ -366,7 +415,34 @@ function persistenceFailure(
     cause,
     completedWrites,
     partialWritePossible,
+    completedStages,
+    usablePlanExists,
   });
+}
+
+function outputFailure(
+  message: string,
+  issues: readonly string[],
+  category: "INVALID_STATE" | "RESPONSE_PLANNING_FAILED" | "PLAN_VALIDATION_FAILED",
+  completedStages: readonly ReactAgentStage[],
+  completedWrites: readonly string[],
+  recommendation: "RELOAD_STATE" | "REGENERATE_PLAN",
+  usablePlanExists = false,
+): ReactOrchestrationOutputError {
+  return new ReactOrchestrationOutputError(
+    message,
+    issues,
+    undefined,
+    {
+      failureCategory: category,
+      failedStage: "response-planning",
+      completedStages,
+      completedWrites,
+      partialPersistence: completedWrites.length > 0,
+      usablePlanExists,
+      recommendation,
+    },
+  );
 }
 
 async function assertAgentRunIdsAvailable(
@@ -417,13 +493,13 @@ function validateResponsePlanForPersistence(
 ): { plan: ResponsePlan; actions: PlanAction[] } {
   const outputValidation = ReactOrchestrationResultSchema.safeParse(orchestration);
   if (!outputValidation.success) {
-    throw persistenceFailure(
+    throw outputFailure(
       "Orchestration output failed schema validation before persistence.",
-      "verification",
-      "response-planning",
-      outputValidation.error,
+      outputValidation.error.issues.map((issue) => issue.message),
+      "RESPONSE_PLANNING_FAILED",
+      orchestration.completedStages,
       completedWrites,
-      false,
+      "REGENERATE_PLAN",
     );
   }
 
@@ -437,28 +513,32 @@ function validateResponsePlanForPersistence(
     !planValidation.success ||
     actionValidation.some((validation) => !validation.success)
   ) {
-    throw persistenceFailure(
+    throw outputFailure(
       "Response plan or PlanAction failed domain validation before persistence.",
-      "verification",
-      "response-planning",
       !planValidation.success
-        ? planValidation.error
-        : actionValidation.find((validation) => !validation.success),
+        ? planValidation.error.issues.map((issue) => issue.message)
+        : actionValidation.flatMap((validation) =>
+            validation.success
+              ? []
+              : validation.error.issues.map((issue) => issue.message),
+          ),
+      "RESPONSE_PLANNING_FAILED",
+      orchestration.completedStages,
       completedWrites,
-      false,
+      "REGENERATE_PLAN",
     );
   }
 
   const plan = planValidation.data;
   const actions = actionValidation.map((validation) => {
     if (!validation.success) {
-      throw persistenceFailure(
+      throw outputFailure(
         "PlanAction failed domain validation before persistence.",
-        "verification",
-        "response-planning",
-        validation.error,
+        validation.error.issues.map((issue) => issue.message),
+        "RESPONSE_PLANNING_FAILED",
+        orchestration.completedStages,
         completedWrites,
-        false,
+        "REGENERATE_PLAN",
       );
     }
     return validation.data;
@@ -469,13 +549,16 @@ function validateResponsePlanForPersistence(
     plan.incidentId !== state.incident.id ||
     plan.stateVersion !== state.stateVersion
   ) {
-    throw persistenceFailure(
+    throw outputFailure(
       "Response plan incident ID or state version does not match the input snapshot.",
-      "verification",
-      "response-planning",
-      new Error("Incident ID or state version mismatch."),
+      [
+        `Expected incidentId ${state.incident.id} and stateVersion ${state.stateVersion}.`,
+        `Received incidentId ${plan.incidentId} and stateVersion ${plan.stateVersion}.`,
+      ],
+      "INVALID_STATE",
+      orchestration.completedStages,
       completedWrites,
-      false,
+      "RELOAD_STATE",
     );
   }
 
@@ -485,24 +568,24 @@ function validateResponsePlanForPersistence(
   const planActionIds = new Set<string>();
   for (const action of actions) {
     if (action.planId !== plan.id || planActionIds.has(action.id)) {
-      throw persistenceFailure(
+      throw outputFailure(
         "PlanAction has a conflicting plan ID or duplicate action ID.",
-        "verification",
-        "response-planning",
-        new Error(`Invalid PlanAction reference ${action.id}.`),
+        [`Invalid PlanAction reference ${action.id}.`],
+        "PLAN_VALIDATION_FAILED",
+        orchestration.completedStages,
         completedWrites,
-        false,
+        "REGENERATE_PLAN",
       );
     }
     planActionIds.add(action.id);
     if (!Number.isInteger(action.estimatedDurationMinutes)) {
-      throw persistenceFailure(
+      throw outputFailure(
         "PlanAction estimated duration must be an integer supported by the database schema.",
-        "verification",
-        "response-planning",
-        new Error(`Invalid estimated duration for PlanAction ${action.id}.`),
+        [`Invalid estimated duration for PlanAction ${action.id}.`],
+        "PLAN_VALIDATION_FAILED",
+        orchestration.completedStages,
         completedWrites,
-        false,
+        "REGENERATE_PLAN",
       );
     }
   }
@@ -519,28 +602,26 @@ function validateResponsePlanForPersistence(
         reference.sequence !== actionsBySequence[index]?.sequence,
     )
   ) {
-    throw persistenceFailure(
+    throw outputFailure(
       "ResponsePlan action references do not exactly match the ordered PlanAction records.",
-      "verification",
-      "response-planning",
-      new Error("ResponsePlan/PlanAction ordering mismatch."),
+      ["ResponsePlan action references and PlanAction sequence do not match."],
+      "PLAN_VALIDATION_FAILED",
+      orchestration.completedStages,
       completedWrites,
-      false,
+      "REGENERATE_PLAN",
     );
   }
 
   if (!responsePlanning.validation.valid) {
-    throw persistenceFailure(
+    throw outputFailure(
       "Response plan failed its deterministic PlanValidator check.",
-      "verification",
-      "response-planning",
-      new Error(
-        responsePlanning.validation.errors
-          .map((issue) => `${issue.code}: ${issue.message}`)
-          .join("; "),
+      responsePlanning.validation.errors.map(
+        (issue) => `${issue.code}: ${issue.message}`,
       ),
+      "PLAN_VALIDATION_FAILED",
+      orchestration.completedStages,
       completedWrites,
-      false,
+      "REGENERATE_PLAN",
     );
   }
 
@@ -549,17 +630,13 @@ function validateResponsePlanForPersistence(
     planActions: [...state.planActions, ...actions],
   });
   if (!validation.valid) {
-    throw persistenceFailure(
+    throw outputFailure(
       "Response plan failed deterministic PlanValidator checks against the input snapshot.",
-      "verification",
-      "response-planning",
-      new Error(
-        validation.errors
-          .map((issue) => `${issue.code}: ${issue.message}`)
-          .join("; "),
-      ),
+      validation.errors.map((issue) => `${issue.code}: ${issue.message}`),
+      "PLAN_VALIDATION_FAILED",
+      orchestration.completedStages,
       completedWrites,
-      false,
+      "REGENERATE_PLAN",
     );
   }
 
@@ -623,13 +700,28 @@ export async function runAndPersistReactOrchestration(
   await assertAgentRunIdsAvailable(state.incident.id, state.stateVersion);
 
   const savedRuns: AgentRun[] = [];
+  const completedStages: ReactAgentStage[] = [];
   let orchestration: ReactOrchestrationResult;
   try {
     orchestration = await runReactOrchestration(
       state,
-      createObserver(state.incident.id, state.stateVersion, savedRuns),
+      createObserver(
+        state.incident.id,
+        state.stateVersion,
+        savedRuns,
+        completedStages,
+      ),
     );
   } catch (cause) {
+    if (cause instanceof ReactOrchestrationStageError) {
+      if (cause.failure.failedStage === null) throw cause;
+      throw new ReactOrchestrationStageError(
+        cause.failure.failedStage,
+        cause.cause,
+        cause.failure.completedStages,
+        savedRuns.map((run) => run.id),
+      );
+    }
     if (cause instanceof ReactOrchestrationError) {
       throw cause;
     }
@@ -640,6 +732,7 @@ export async function runAndPersistReactOrchestration(
       cause,
       savedRuns.map((run) => run.id),
       false,
+      completedStages,
     );
   }
 
@@ -659,18 +752,20 @@ export async function runAndPersistReactOrchestration(
       cause,
       savedRuns.map((run) => run.id),
       false,
+      completedStages,
     );
   }
   if (persistedStateVersion !== state.stateVersion) {
-    throw persistenceFailure(
+    throw outputFailure(
       "EmergencyState changed during orchestration; refusing to persist a stale response plan.",
-      "verification",
-      "response-planning",
-      new Error(
-        `Expected persisted state version ${state.stateVersion}, received ${String(persistedStateVersion)}.`,
-      ),
+      [
+        `Expected persisted state version ${state.stateVersion}.`,
+        `Received persisted state version ${String(persistedStateVersion)}.`,
+      ],
+      "INVALID_STATE",
+      completedStages,
       savedRuns.map((run) => run.id),
-      false,
+      "RELOAD_STATE",
     );
   }
 
@@ -685,6 +780,8 @@ export async function runAndPersistReactOrchestration(
       cause,
       savedRuns.map((run) => run.id),
       false,
+      completedStages,
+      true,
     );
   }
   if (existingPlan !== null) {
@@ -695,6 +792,8 @@ export async function runAndPersistReactOrchestration(
       new Error(`ResponsePlan ${validated.plan.id} already exists.`),
       savedRuns.map((run) => run.id),
       false,
+      completedStages,
+      true,
     );
   }
 
@@ -722,6 +821,8 @@ export async function runAndPersistReactOrchestration(
       cause,
       completedWrites,
       true,
+      completedStages,
+      true,
     );
   }
   completedWrites.push(`response-plan:${validated.plan.id}`);
@@ -737,6 +838,8 @@ export async function runAndPersistReactOrchestration(
         "response-planning",
         cause,
         [...completedWrites, ...persistedActions.map((saved) => saved.id)],
+        true,
+        completedStages,
         true,
       );
     }
@@ -758,6 +861,8 @@ export async function runAndPersistReactOrchestration(
       cause,
       completedWrites,
       true,
+      completedStages,
+      true,
     );
   }
   if (
@@ -776,6 +881,8 @@ export async function runAndPersistReactOrchestration(
       new Error("Persisted plan/action verification mismatch."),
       completedWrites,
       false,
+      completedStages,
+      true,
     );
   }
 
