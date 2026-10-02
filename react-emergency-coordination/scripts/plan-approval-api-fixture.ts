@@ -70,7 +70,17 @@ const provider: EmergencyStateProvider = {
     return plans.get(planId) ?? null;
   },
   async getStateForPlan() {
-    return state;
+    return { state, stateChanges: [], agentRuns: [], humanDecisions: [] };
+  },
+  async persistPlan(updatedPlan) {
+    plans.set(updatedPlan.id, updatedPlan);
+  },
+  async persistDecision(_previousPlan, updatedPlan) {
+    plans.set(updatedPlan.id, updatedPlan);
+  },
+  async persistModifiedPlan(previousPlan, revisedPlan) {
+    plans.set(previousPlan.id, { ...previousPlan, status: "SUPERSEDED" });
+    plans.set(revisedPlan.id, revisedPlan);
   },
 };
 
@@ -101,6 +111,7 @@ async function json(response: Response): Promise<Record<string, unknown>> {
 async function main(): Promise<void> {
 const submitted = await handlers.submit(request("POST"), context);
 assert.equal(submitted.status, 200);
+assert.equal(plans.get("plan-1")?.status, "PENDING_APPROVAL");
 plans.set("plan-1", { ...plan, status: "PENDING_APPROVAL" });
 
 const invalidSubmit = await handlers.submit(
@@ -114,6 +125,7 @@ plans.set("plan-1", { ...plan, status: "PENDING_APPROVAL" });
 
 const approved = await handlers.approve(request("POST", decision), context);
 assert.equal(approved.status, 201);
+assert.equal(plans.get("plan-1")?.status, "APPROVED");
 plans.set("plan-1", { ...plan, status: "APPROVED" });
 assert.equal((await handlers.approve(request("POST", decision), context)).status, 409);
 
@@ -123,13 +135,31 @@ assert.equal((await handlers.approve(request("POST", decision), context)).status
 plans.set("plan-1", { ...plan, status: "PENDING_APPROVAL" });
 assert.equal((await handlers.reject(request("POST", { ...decision, reason: " " }), context)).status, 400);
 assert.equal((await handlers.reject(request("POST", { ...decision, reason: "Route unsafe." }), context)).status, 201);
+assert.equal(plans.get("plan-1")?.status, "REJECTED");
 
 plans.set("plan-1", { ...plan, status: "PENDING_APPROVAL" });
-const modifiedPlan = { ...plan, summary: "Use alternate evacuation route." };
+const modifiedPlan = {
+  ...plan,
+  id: "plan-2",
+  summary: "Use alternate evacuation route.",
+  actions: [{ actionId: "action-2", sequence: 1 }],
+};
+const modifiedAction = {
+  ...state.planActions[0]!,
+  id: "action-2",
+  planId: "plan-2",
+};
 assert.equal(
-  (await handlers.modify(request("POST", { ...decision, modifiedPlan }), context)).status,
+  (
+    await handlers.modify(
+      request("POST", { ...decision, modifiedPlan, modifiedActions: [modifiedAction] }),
+      context,
+    )
+  ).status,
   201,
 );
+assert.equal(plans.get("plan-1")?.status, "SUPERSEDED");
+assert.equal(plans.get("plan-2")?.status, "PENDING_APPROVAL");
 assert.equal(
   (
     await handlers.modify(
@@ -148,6 +178,7 @@ assert.equal(
   ).status,
   409,
 );
+plans.set("plan-1", { ...plan, status: "PENDING_APPROVAL" });
 assert.equal(
   (
     await handlers.approve(
