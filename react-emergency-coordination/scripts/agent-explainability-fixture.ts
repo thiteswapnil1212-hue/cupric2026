@@ -17,8 +17,12 @@ assert.equal(started.snapshot.humanDecision, null);
 
   const approved = await controller.approveCurrentPlan();
   if (!approved.success) throw new Error("initial approval failed");
-assert.equal(approved.snapshot.humanDecision?.decision, "APPROVE");
-assert.equal(approved.snapshot.currentPlan?.status, "COMPLETED");
+  assert.equal(approved.snapshot.humanDecision?.decision, "APPROVE");
+  assert.equal(approved.snapshot.stage, "AWAITING_EXECUTION");
+  assert.equal(approved.snapshot.currentPlan?.status, "APPROVED");
+  assert.equal(controller.beginExecution().success, true);
+  assert.equal(controller.completeExecution().success, true);
+  assert.equal(controller.getSnapshot().currentPlan?.status, "COMPLETED");
 
   const blocked = await controller.simulateRouteBlockage();
   if (!blocked.success) throw new Error("route blockage failed");
@@ -31,8 +35,12 @@ assert.equal(blocked.snapshot.humanDecision, null);
 
   const final = await controller.approveCurrentPlan();
   if (!final.success) throw new Error("revised approval failed");
-assert.equal(final.snapshot.humanDecision?.decision, "APPROVE");
-assert.equal(final.snapshot.currentPlan?.status, "COMPLETED");
+  assert.equal(final.snapshot.humanDecision?.decision, "APPROVE");
+  assert.equal(final.snapshot.stage, "AWAITING_EXECUTION");
+  assert.equal(final.snapshot.currentPlan?.status, "APPROVED");
+  assert.equal(controller.beginExecution().success, true);
+  assert.equal(controller.completeExecution().success, true);
+  assert.equal(controller.getSnapshot().currentPlan?.status, "COMPLETED");
 
   const reset = controller.resetDemo();
   assert.equal(reset.success, true);

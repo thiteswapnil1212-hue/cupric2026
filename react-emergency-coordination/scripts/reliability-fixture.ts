@@ -239,6 +239,9 @@ async function main(): Promise<void> {
   const failedRevision = createDemoController(revisedFailureFactory);
   await failedRevision.startDemo();
   await failedRevision.approveCurrentPlan();
+  assert.equal(failedRevision.getSnapshot().stage, "AWAITING_EXECUTION");
+  assert.equal(failedRevision.beginExecution().success, true);
+  assert.equal(failedRevision.completeExecution().success, true);
   const planOne = failedRevision.getSnapshot().currentPlan;
   const failedSecondPlan = await failedRevision.simulateRouteBlockage();
   assert.equal(failedSecondPlan.success, false);
