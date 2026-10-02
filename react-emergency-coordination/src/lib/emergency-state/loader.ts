@@ -9,6 +9,7 @@ import {
   listResources,
   listRoutes,
 } from "../supabase/services";
+import { initializeEmergencyStateVersion } from "../supabase/services/emergency-states";
 
 export async function loadEmergencyState(
   incidentId: string,
@@ -25,12 +26,14 @@ export async function loadEmergencyState(
     throw new Error(`Loaded incident does not match requested id: ${incidentId}`);
   }
 
-  const [resources, facilities, routes, activePlanRecord] = await Promise.all([
-    listResources(),
-    listFacilities(),
-    listRoutes(),
-    getActiveResponsePlanForIncident(incidentId),
-  ]);
+  const [stateVersion, resources, facilities, routes, activePlanRecord] =
+    await Promise.all([
+      initializeEmergencyStateVersion(incidentId),
+      listResources(),
+      listFacilities(),
+      listRoutes(),
+      getActiveResponsePlanForIncident(incidentId),
+    ]);
 
   if (activePlanRecord !== null) {
     if (activePlanRecord.incidentId !== incident.id) {
@@ -38,9 +41,9 @@ export async function loadEmergencyState(
         `Active response plan ${activePlanRecord.id} does not belong to incident ${incident.id}.`,
       );
     }
-    if (activePlanRecord.stateVersion > 1) {
+    if (activePlanRecord.stateVersion > stateVersion) {
       throw new Error(
-        `Active response plan ${activePlanRecord.id} is newer than the initial state version.`,
+        `Active response plan ${activePlanRecord.id} is newer than the persisted emergency state version.`,
       );
     }
 
@@ -65,7 +68,7 @@ export async function loadEmergencyState(
     facilities,
     routes,
     activePlan: null,
-    stateVersion: 1,
+    stateVersion,
     updatedAt: new Date(latestUpdatedAt).toISOString(),
   });
 }
