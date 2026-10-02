@@ -69,6 +69,9 @@ const provider: EmergencyStateProvider = {
   async getPlan(planId) {
     return plans.get(planId) ?? null;
   },
+  async getStateForIncident() {
+    return state;
+  },
   async getStateForPlan() {
     return { state, stateChanges: [], agentRuns: [], humanDecisions: [] };
   },
