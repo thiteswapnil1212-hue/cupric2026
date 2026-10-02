@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { EmergencyStateSchema } from "../../domain/emergency-state/schema";
+import type { PlanAction } from "../../domain/plan-action/schema";
 import { ResponsePlanSchema } from "../../domain/response-plan/schema";
 import type { RiskAssessment } from "../agents/risk-assessment/schema";
 import type { ResourceRoutingAssessment } from "../agents/resource-routing/schema";
@@ -66,13 +67,14 @@ export type ReplanningResult = {
   readonly riskAssessment: RiskAssessment | null;
   readonly resourceRoutingAssessment: ResourceRoutingAssessment | null;
   readonly revisedPlan: z.infer<typeof ResponsePlanSchema> | null;
+  readonly revisedPlanActions: readonly PlanAction[] | null;
   readonly validation: {
     readonly valid: boolean;
     readonly errors: readonly { readonly code: string; readonly message: string }[];
     readonly warnings: readonly { readonly code: string; readonly message: string }[];
   } | null;
   readonly previousPlanSuperseded: boolean;
-  readonly previousPlanSupersessionPersisted: false;
+  readonly previousPlanSupersessionPersisted: boolean;
   readonly timing: ReplanningTiming;
   readonly error: ReplanningError | null;
 };
