@@ -1,4 +1,4 @@
-"use client";
+import "server-only";
 
 import { createClient } from "@supabase/supabase-js";
 import { getClientEnvironment } from "../config/env";
