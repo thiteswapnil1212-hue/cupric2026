@@ -52,7 +52,7 @@ export type DashboardAction = PlanAction & {
 export type DashboardAgent = {
   id: string;
   label: string;
-  status: AgentRun["status"];
+  status: AgentRun["status"] | "STANDBY";
   statusLabel: string;
   timeLabel: string;
   tone: StatusTone;
@@ -94,6 +94,12 @@ export type DashboardViewModel = {
   previousPlan: ResponsePlan | null;
   approvalAvailable: boolean;
 };
+
+export function responsePlanSourceLabel(source: ResponsePlan["source"]): string {
+  if (source === "GEMINI") return "AI RECOMMENDATION";
+  if (source === "DETERMINISTIC_FALLBACK") return "DETERMINISTIC FALLBACK";
+  return "SOURCE UNAVAILABLE";
+}
 
 const agentLabels: Record<AgentType, string> = {
   RISK_ASSESSMENT: "Risk Assessment",
@@ -141,9 +147,6 @@ function agentSummary(run: AgentRun): string {
 
 function runsForSnapshot(snapshot: DemoStateSnapshot | DemoSnapshot): readonly AgentRun[] {
   if (!("stage" in snapshot)) return snapshot.agentRuns;
-  if (snapshot.stage === "IDLE") {
-    return snapshot.agentRuns.map((run) => ({ ...run, status: "PENDING", completedAt: null, durationMs: null, output: null }));
-  }
   if (snapshot.stage === "EMERGENCY_INITIALIZED" || snapshot.stage === "ANALYZING" || snapshot.stage === "REASSESSING") {
     return snapshot.agentRuns.map((run) => ({ ...run, status: "RUNNING", completedAt: null, durationMs: null, output: null }));
   }
@@ -175,6 +178,7 @@ export function createDashboardViewModel(
   snapshot: DemoStateSnapshot | DemoSnapshot,
 ): DashboardViewModel {
   const { state, stateChanges } = snapshot;
+  const idle = "stage" in snapshot && snapshot.stage === "IDLE";
   const agentRuns = runsForSnapshot(snapshot);
   const plan = state.activePlan;
   const approvalAvailable = "stage" in snapshot
@@ -217,14 +221,14 @@ export function createDashboardViewModel(
     agents: agentRuns.map((run) => ({
       id: run.id,
       label: agentLabels[run.agentType],
-      status: run.status,
-      statusLabel: titleCase(run.status),
-      timeLabel: timeLabel(run.completedAt ?? run.startedAt),
-      tone: run.status === "COMPLETED" ? "green" : run.status === "RUNNING" ? "amber" : "red",
+      status: idle ? "STANDBY" : run.status,
+      statusLabel: idle ? "STANDBY" : titleCase(run.status),
+      timeLabel: idle ? "Not started" : timeLabel(run.completedAt ?? run.startedAt),
+      tone: idle ? "gray" : run.status === "COMPLETED" ? "green" : run.status === "RUNNING" ? "amber" : "red",
       purpose: agentPurposes[run.agentType],
-      durationLabel: run.durationMs === null ? "Duration unavailable" : `${run.durationMs} ms`,
-      resultSummary: agentSummary(run),
-      affectedPlan: run.agentType === "RESPONSE_PLANNING" || run.status === "COMPLETED",
+      durationLabel: idle ? "—" : run.durationMs === null ? "Duration unavailable" : `${run.durationMs} ms`,
+      resultSummary: idle ? "Awaiting demo start" : agentSummary(run),
+      affectedPlan: !idle && (run.agentType === "RESPONSE_PLANNING" || run.status === "COMPLETED"),
     })),
     timeline: toTimeline(stateChanges),
     reassessment: {
