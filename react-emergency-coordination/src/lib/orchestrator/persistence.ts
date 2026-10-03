@@ -806,6 +806,7 @@ export async function runAndPersistReactOrchestration(
     priority: validated.plan.priority,
     summary: validated.plan.summary,
     rationale: validated.plan.rationale,
+    source: validated.plan.source,
     generatedAt: validated.plan.generatedAt,
     updatedAt: validated.plan.updatedAt,
     alternatives: validated.plan.alternatives,
