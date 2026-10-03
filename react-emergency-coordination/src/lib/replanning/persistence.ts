@@ -88,6 +88,7 @@ async function defaultDependencies(): Promise<ReplanningPersistenceDependencies>
         priority: plan.priority,
         summary: plan.summary,
         rationale: plan.rationale,
+        source: plan.source,
         generatedAt: plan.generatedAt,
         updatedAt: plan.updatedAt,
         alternatives: plan.alternatives,
