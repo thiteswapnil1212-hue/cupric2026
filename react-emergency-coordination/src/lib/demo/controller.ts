@@ -64,6 +64,15 @@ function changeRecord(
   return { id, entityType, entityId, changeType, description, previousValue, newValue, occurredAt, detectedAt: occurredAt };
 }
 
+function includePlanActions(
+  state: EmergencyState,
+  actions: readonly PlanAction[],
+): EmergencyState {
+  const actionsById = new Map(state.planActions.map((action) => [action.id, action]));
+  for (const action of actions) actionsById.set(action.id, action);
+  return { ...state, planActions: [...actionsById.values()] };
+}
+
 function createPlanResult(
   state: EmergencyState,
   planId: string,
@@ -79,6 +88,7 @@ function createPlanResult(
     priority: "URGENT",
     summary,
     rationale,
+    source: "DETERMINISTIC_FALLBACK",
     generatedAt: planId === "PLAN-001" ? demoTimes.initialPlan : demoTimes.revisedPlan,
     updatedAt: planId === "PLAN-001" ? demoTimes.initialPlan : demoTimes.revisedPlan,
     actions: actions.map((action) => ({ actionId: action.id, sequence: action.sequence })),
@@ -308,7 +318,7 @@ export class DemoController {
     }
     const submitted = submitPlanForApproval(generated.plan);
     if (!submitted.success) return this.fail("PLAN_GENERATED", submitted.error.code, submitted.error.message);
-    this.snapshot = { ...this.snapshot, stage: "AWAITING_APPROVAL", currentPlan: submitted.plan, planHistory: [submitted.plan], state: { ...initialState, activePlan: submitted.plan }, riskAssessment, resourceRoutingAssessment, responsePlanningResult: generated, validation: generated.validation, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-002", "PLAN", submitted.plan.id, "CREATED", "Response Plan-001 generated", null, "PENDING_APPROVAL", demoTimes.initialPlan)], progress: { current: 2, total: 9, label: "Human authorization required" } };
+    this.snapshot = { ...this.snapshot, stage: "AWAITING_APPROVAL", currentPlan: submitted.plan, planHistory: [submitted.plan], state: { ...includePlanActions(initialState, generated.actions), activePlan: submitted.plan }, riskAssessment, resourceRoutingAssessment, responsePlanningResult: generated, validation: generated.validation, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-002", "PLAN", submitted.plan.id, "CREATED", "Response Plan-001 generated", null, "PENDING_APPROVAL", demoTimes.initialPlan)], progress: { current: 2, total: 9, label: "Human authorization required" } };
     return { success: true, snapshot: this.snapshot };
   }
 
@@ -557,7 +567,7 @@ export class DemoController {
     }
     const revisedPlan = submitPlanForApproval(revised.plan);
     if (!revisedPlan.success) return this.fail("REASSESSING", revisedPlan.error.code, revisedPlan.error.message);
-    this.snapshot = { ...this.snapshot, stage: "AWAITING_REVISED_APPROVAL", state: { ...currentState, planActions: [...currentState.planActions, ...revised.actions], activePlan: revisedPlan.plan }, currentPlan: revisedPlan.plan, previousPlan: activePlan, planHistory: [...this.snapshot.planHistory, revisedPlan.plan], riskAssessment, resourceRoutingAssessment, responsePlanningResult: revised, validation: revised.validation, humanDecision: null, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-PLAN-002", "PLAN", revisedPlan.plan.id, "CREATED", "Response Plan-002 generated", null, "PENDING_APPROVAL", demoTimes.revisedPlan)], progress: { current: 7, total: 9, label: "Revised plan ready · human authorization required" }, error: null };
+    this.snapshot = { ...this.snapshot, stage: "AWAITING_REVISED_APPROVAL", state: { ...includePlanActions(currentState, revised.actions), activePlan: revisedPlan.plan }, currentPlan: revisedPlan.plan, previousPlan: activePlan, planHistory: [...this.snapshot.planHistory, revisedPlan.plan], riskAssessment, resourceRoutingAssessment, responsePlanningResult: revised, validation: revised.validation, humanDecision: null, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-PLAN-002", "PLAN", revisedPlan.plan.id, "CREATED", "Response Plan-002 generated", null, "PENDING_APPROVAL", demoTimes.revisedPlan)], progress: { current: 7, total: 9, label: "Revised plan ready · human authorization required" }, error: null };
     return { success: true, snapshot: this.snapshot };
   }
 
