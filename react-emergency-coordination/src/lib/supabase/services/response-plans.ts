@@ -3,6 +3,7 @@ import {
   ResponsePlanSchema,
   type ResponsePlan,
 } from "../../../domain/response-plan/schema";
+import { decodePlanSource, encodePlanSource } from "../plan-source";
 import { supabase } from "../client";
 import { listPlanActionsForPlan } from "./plan-actions";
 
@@ -29,13 +30,14 @@ export type ResponsePlanRecord = Pick<
   | "priority"
   | "summary"
   | "rationale"
+  | "source"
   | "generatedAt"
   | "updatedAt"
 > & { createdAt: string };
 
 export type CreateResponsePlanInput = Omit<ResponsePlan, "actions">;
 export type ResponsePlanUpdates = Partial<
-  Omit<CreateResponsePlanInput, "id">
+  Omit<CreateResponsePlanInput, "id" | "source">
 >;
 
 type ResponsePlanDatabaseInsert = Omit<
@@ -82,6 +84,7 @@ const activePlanStatuses: ResponsePlan["status"][] = [
 function toResponsePlanRecord(
   row: ResponsePlanDatabaseRow,
 ): ResponsePlanRecord {
+  const provenance = decodePlanSource(row.rationale);
   return {
     id: row.id,
     incidentId: row.incident_id,
@@ -89,7 +92,8 @@ function toResponsePlanRecord(
     status: row.status,
     priority: row.priority,
     summary: row.summary,
-    rationale: row.rationale,
+    rationale: provenance.rationale,
+    source: provenance.source,
     generatedAt: row.generated_at,
     updatedAt: row.updated_at,
     createdAt: row.created_at,
@@ -107,7 +111,7 @@ function toDatabaseInsert(
     status: plan.status,
     priority: plan.priority,
     summary: plan.summary,
-    rationale: plan.rationale,
+    rationale: encodePlanSource(plan.rationale, plan.source),
     generated_at: plan.generatedAt,
     updated_at: plan.updatedAt,
   };
@@ -115,6 +119,7 @@ function toDatabaseInsert(
 
 function toDatabaseUpdates(
   updates: ResponsePlanUpdates,
+  currentRationale?: string,
 ): ResponsePlanDatabaseUpdate {
   const row: ResponsePlanDatabaseUpdate = {};
 
@@ -123,7 +128,13 @@ function toDatabaseUpdates(
   if (updates.status !== undefined) row.status = updates.status;
   if (updates.priority !== undefined) row.priority = updates.priority;
   if (updates.summary !== undefined) row.summary = updates.summary;
-  if (updates.rationale !== undefined) row.rationale = updates.rationale;
+  if (updates.rationale !== undefined) {
+    const source =
+      currentRationale === undefined
+        ? "UNKNOWN"
+        : decodePlanSource(currentRationale).source;
+    row.rationale = encodePlanSource(updates.rationale, source);
+  }
   if (updates.generatedAt !== undefined) row.generated_at = updates.generatedAt;
   if (updates.updatedAt !== undefined) row.updated_at = updates.updatedAt;
 
@@ -142,6 +153,18 @@ async function listPlanAlternatives(
 
   if (error) throw error;
   return data;
+}
+
+async function getStoredPlanRationale(planId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("response_plans")
+    .select("rationale")
+    .eq("id", planId)
+    .limit(1)
+    .overrideTypes<{ rationale: string }[], { merge: false }>();
+
+  if (error) throw error;
+  return data[0]?.rationale ?? null;
 }
 
 async function listPlanResourceDependencies(
@@ -197,6 +220,7 @@ async function toCompleteResponsePlan(
       `Response plan ${row.id} has not had its normalized alternatives and dependencies explicitly persisted.`,
     );
   }
+  const provenance = decodePlanSource(row.rationale);
 
   const [actions, alternatives, resourceDependencies, facilityDependencies, routeDependencies] =
     await Promise.all([
@@ -232,7 +256,8 @@ async function toCompleteResponsePlan(
     status: row.status,
     priority: row.priority,
     summary: row.summary,
-    rationale: row.rationale,
+    rationale: provenance.rationale,
+    source: provenance.source,
     generatedAt: row.generated_at,
     updatedAt: row.updated_at,
     actions: orderedActions.map((action: PlanAction) => ({
@@ -506,7 +531,10 @@ export async function updateResponsePlan(
   id: string,
   updates: ResponsePlanUpdates,
 ): Promise<ResponsePlanRecord | null> {
-  const databaseUpdates = toDatabaseUpdates(updates);
+  const currentRationale =
+    updates.rationale === undefined ? undefined : await getStoredPlanRationale(id);
+  if (currentRationale === null) return null;
+  const databaseUpdates = toDatabaseUpdates(updates, currentRationale);
   const updatesRelations =
     updates.alternatives !== undefined || updates.dependencies !== undefined;
   if (Object.keys(databaseUpdates).length === 0 && !updatesRelations) {
@@ -550,7 +578,10 @@ export async function transitionResponsePlan(
   expectedStatus: ResponsePlan["status"],
   updates: ResponsePlanUpdates,
 ): Promise<ResponsePlanRecord | null> {
-  const databaseUpdates = toDatabaseUpdates(updates);
+  const currentRationale =
+    updates.rationale === undefined ? undefined : await getStoredPlanRationale(id);
+  if (currentRationale === null) return null;
+  const databaseUpdates = toDatabaseUpdates(updates, currentRationale);
   const updatesRelations =
     updates.alternatives !== undefined || updates.dependencies !== undefined;
   if (databaseUpdates.status === undefined) {
