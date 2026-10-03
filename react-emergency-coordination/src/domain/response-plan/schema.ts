@@ -25,6 +25,14 @@ export const PlanPrioritySchema = z.enum([
 
 export type PlanPriority = z.infer<typeof PlanPrioritySchema>;
 
+export const PlanSourceSchema = z.enum([
+  "GEMINI",
+  "DETERMINISTIC_FALLBACK",
+  "UNKNOWN",
+]);
+
+export type PlanSource = z.infer<typeof PlanSourceSchema>;
+
 export const PlanActionReferenceSchema = z
   .object({
     actionId: nonEmptyStringSchema,
@@ -65,6 +73,7 @@ export const ResponsePlanSchema = z
     priority: PlanPrioritySchema,
     summary: nonEmptyStringSchema,
     rationale: nonEmptyStringSchema,
+    source: PlanSourceSchema.optional(),
     generatedAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
     actions: z.array(PlanActionReferenceSchema).min(1),
