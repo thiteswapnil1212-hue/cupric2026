@@ -12,6 +12,7 @@ import {
   generateStructuredJson,
   serializeGeminiInput,
   type GeminiGenerationMetadata,
+  type GenerateStructuredJsonOptions,
 } from "../../ai/gemini";
 import { validateEmergencyStateConsistency } from "../../emergency-state/consistency";
 import {
@@ -74,6 +75,15 @@ export type ResourceRoutingAgentErrorCode =
   | "RESOURCE_ROUTING_UNKNOWN_FACILITY"
   | "RESOURCE_ROUTING_UNKNOWN_ROUTE"
   | "RESOURCE_ROUTING_DUPLICATE_REFERENCE";
+
+export type ResourceRoutingAgentDependencies = {
+  readonly generateStructuredJson: (
+    options: GenerateStructuredJsonOptions<ResourceRoutingAssessment>,
+  ) => Promise<ResourceRoutingAssessment>;
+  readonly onGenerationMetadata?: (
+    metadata: GeminiGenerationMetadata,
+  ) => void;
+};
 
 export class ResourceRoutingAgentError extends Error {
   readonly code: ResourceRoutingAgentErrorCode;
@@ -281,6 +291,8 @@ function mapGeminiError(error: GeminiError): ResourceRoutingAgentError {
       return new ResourceRoutingAgentError(
         "RESOURCE_ROUTING_INVALID_STRUCTURED_OUTPUT",
         "Gemini did not return a usable resource and routing assessment.",
+        undefined,
+        error.metadata,
       );
     case "GEMINI_SCHEMA_VALIDATION_FAILED":
       return new ResourceRoutingAgentError(
@@ -478,6 +490,7 @@ function validateAssessmentFacts(
 
 export async function runResourceRoutingAssessment(
   emergencyState: EmergencyState,
+  dependencies: ResourceRoutingAgentDependencies = { generateStructuredJson },
 ): Promise<ResourceRoutingAssessment> {
   const stateValidation = EmergencyStateSchema.safeParse(emergencyState);
   if (!stateValidation.success) {
@@ -505,7 +518,7 @@ export async function runResourceRoutingAssessment(
   const facts = deriveOperationalFacts(state);
   let generatedAssessment: ResourceRoutingAssessment;
   try {
-    generatedAssessment = await generateStructuredJson({
+    generatedAssessment = await dependencies.generateStructuredJson({
       systemInstruction: resourceRoutingSystemInstruction,
       input: serializeGeminiInput({
         stateVersion: facts.stateVersion,
@@ -515,6 +528,7 @@ export async function runResourceRoutingAssessment(
         routes: facts.routes,
       }),
       schema: ResourceRoutingAssessmentSchema,
+      onMetadata: dependencies.onGenerationMetadata,
     });
   } catch (error) {
     if (error instanceof GeminiError) throw mapGeminiError(error);
