@@ -32,7 +32,11 @@ import {
   type ProposedPlanAction,
   type ResponsePlanningOutput,
 } from "./schema";
-import type { ResponsePlanningAlternative, ResponsePlanningResult } from "./types";
+import type {
+  ResponsePlanningAlternative,
+  ResponsePlanningGenerationMetadata,
+  ResponsePlanningResult,
+} from "./types";
 export type { ResponsePlanningAlternative, ResponsePlanningResult } from "./types";
 
 const responsePlanningSystemInstruction = `You are the Response Planning Agent in REACT.
@@ -65,7 +69,14 @@ export type ResponsePlanningAgentErrorCode =
   | "RESPONSE_PLANNING_SCHEMA_VALIDATION_FAILED"
   | "RESPONSE_PLANNING_OUTPUT_INVALID"
   | "RESPONSE_PLANNING_ID_GENERATION_CONFLICT"
-  | "RESPONSE_PLANNING_PRIMARY_PLAN_INVALID";
+  | "RESPONSE_PLANNING_PRIMARY_PLAN_INVALID"
+  | "RESPONSE_PLANNING_DETERMINISTIC_FALLBACK_INVALID";
+
+export type ResponsePlanningAgentDependencies = {
+  generateStructuredJson?: typeof generateStructuredJson;
+  planId?: string;
+  onGenerationMetadata?: (metadata: GeminiGenerationMetadata) => void;
+};
 
 export class ResponsePlanningAgentError extends Error {
   readonly code: ResponsePlanningAgentErrorCode;
@@ -390,6 +401,8 @@ function mapGeminiError(error: GeminiError): ResponsePlanningAgentError {
       return new ResponsePlanningAgentError(
         "RESPONSE_PLANNING_INVALID_STRUCTURED_OUTPUT",
         "Gemini did not return a usable structured response plan.",
+        undefined,
+        error.metadata,
       );
     case "GEMINI_SCHEMA_VALIDATION_FAILED":
       return new ResponsePlanningAgentError(
@@ -563,6 +576,7 @@ export async function runResponsePlanning(
   emergencyState: EmergencyState,
   riskAssessment: RiskAssessment,
   resourceRoutingAssessment: ResourceRoutingAssessment,
+  dependencies: ResponsePlanningAgentDependencies = {},
 ): Promise<ResponsePlanningResult> {
   const stateValidation = EmergencyStateSchema.safeParse(emergencyState);
   if (!stateValidation.success) {
@@ -612,11 +626,17 @@ export async function runResponsePlanning(
   validateResourceRoutingFacts(routing, state);
 
   let generatedOutput: ResponsePlanningOutput;
+  let generatedMetadata: GeminiGenerationMetadata | undefined;
   try {
-    generatedOutput = await generateStructuredJson({
+    generatedOutput = await (dependencies.generateStructuredJson ??
+      generateStructuredJson)({
       systemInstruction: responsePlanningSystemInstruction,
       input: serializeResponsePlanningFacts(state, risk, routing),
       schema: ResponsePlanningOutputSchema,
+      onMetadata: (metadata) => {
+        generatedMetadata = metadata;
+        dependencies.onGenerationMetadata?.(metadata);
+      },
     });
   } catch (error) {
     if (error instanceof GeminiError) throw mapGeminiError(error);
@@ -638,7 +658,7 @@ export async function runResponsePlanning(
   validateProposalReferences(output, state);
 
   const timestamp = new Date().toISOString();
-  const planId = crypto.randomUUID();
+  const planId = dependencies.planId ?? crypto.randomUUID();
   const actions = createPlanActions(
     output.primaryPlan.actions,
     planId,
@@ -658,6 +678,7 @@ export async function runResponsePlanning(
     priority: output.primaryPlan.priority,
     summary: output.primaryPlan.summary,
     rationale: output.primaryPlan.rationale,
+    source: "GEMINI",
     generatedAt: timestamp,
     updatedAt: timestamp,
     actions: [...actions]
@@ -692,5 +713,18 @@ export async function runResponsePlanning(
     reasoning: output.reasoning,
     confidence: output.confidence,
     validation,
+    ...(generatedMetadata === undefined
+      ? {}
+      : {
+          generation: {
+            aiAttempted: true,
+            modelsAttempted: generatedMetadata.attemptedModels,
+            selectedModel: generatedMetadata.selectedModel,
+            failureCategory:
+              generatedMetadata.finalProviderFailure?.category ?? null,
+            fallbackActivated: false,
+            fallbackValidation: null,
+          } satisfies ResponsePlanningGenerationMetadata,
+        }),
   };
 }
