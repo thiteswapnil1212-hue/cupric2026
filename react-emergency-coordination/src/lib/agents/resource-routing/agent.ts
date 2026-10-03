@@ -7,7 +7,12 @@ import {
 import type { Facility } from "../../../domain/facility/schema";
 import type { Resource } from "../../../domain/resource/schema";
 import type { Route } from "../../../domain/route/schema";
-import { GeminiError, generateStructuredJson, serializeGeminiInput } from "../../ai/gemini";
+import {
+  GeminiError,
+  generateStructuredJson,
+  serializeGeminiInput,
+  type GeminiGenerationMetadata,
+} from "../../ai/gemini";
 import { validateEmergencyStateConsistency } from "../../emergency-state/consistency";
 import {
   canAssignResource,
@@ -61,6 +66,7 @@ export type ResourceRoutingAgentErrorCode =
   | "RESOURCE_ROUTING_GEMINI_CONFIG_ERROR"
   | "RESOURCE_ROUTING_GEMINI_REQUEST_ERROR"
   | "RESOURCE_ROUTING_GEMINI_TIMEOUT"
+  | "RESOURCE_ROUTING_GEMINI_UNAVAILABLE"
   | "RESOURCE_ROUTING_INVALID_STRUCTURED_OUTPUT"
   | "RESOURCE_ROUTING_SCHEMA_VALIDATION_FAILED"
   | "RESOURCE_ROUTING_FACT_CONFLICT"
@@ -72,16 +78,19 @@ export type ResourceRoutingAgentErrorCode =
 export class ResourceRoutingAgentError extends Error {
   readonly code: ResourceRoutingAgentErrorCode;
   readonly issues: readonly string[] | undefined;
+  readonly geminiGeneration: GeminiGenerationMetadata | undefined;
 
   constructor(
     code: ResourceRoutingAgentErrorCode,
     message: string,
     issues?: readonly string[],
+    geminiGeneration?: GeminiGenerationMetadata,
   ) {
     super(message);
     this.name = "ResourceRoutingAgentError";
     this.code = code;
     this.issues = issues;
+    this.geminiGeneration = geminiGeneration;
   }
 }
 
@@ -250,11 +259,22 @@ function mapGeminiError(error: GeminiError): ResourceRoutingAgentError {
       return new ResourceRoutingAgentError(
         "RESOURCE_ROUTING_GEMINI_REQUEST_ERROR",
         "Resource and routing Gemini request failed.",
+        undefined,
+        error.metadata,
       );
     case "GEMINI_TIMEOUT":
       return new ResourceRoutingAgentError(
         "RESOURCE_ROUTING_GEMINI_TIMEOUT",
         "Resource and routing Gemini request timed out.",
+        undefined,
+        error.metadata,
+      );
+    case "GEMINI_AI_UNAVAILABLE":
+      return new ResourceRoutingAgentError(
+        "RESOURCE_ROUTING_GEMINI_UNAVAILABLE",
+        "Resource and routing assessment is unavailable because all configured Gemini models failed.",
+        undefined,
+        error.metadata,
       );
     case "GEMINI_EMPTY_RESPONSE":
     case "GEMINI_INVALID_JSON":
@@ -267,6 +287,7 @@ function mapGeminiError(error: GeminiError): ResourceRoutingAgentError {
         "RESOURCE_ROUTING_SCHEMA_VALIDATION_FAILED",
         "Gemini output did not match the ResourceRoutingAssessment schema.",
         error.validationIssues,
+        error.metadata,
       );
   }
 }

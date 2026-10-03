@@ -3,20 +3,39 @@ import "server-only";
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import {
+  classifyGeminiProviderFailure,
   GeminiError,
   geminiRequestFailure,
   parseStructuredJson,
   requireGeminiApiKey,
+  type GeminiFailureCategory,
+  type GeminiGenerationMetadata,
+  type GeminiModel,
   type GeminiErrorCode,
 } from "./gemini-contract";
 
 export { GeminiError, parseStructuredJson };
-export type { GeminiErrorCode };
+export type {
+  GeminiErrorCode,
+  GeminiGenerationMetadata,
+  GeminiModel,
+};
 
-const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+const GEMINI_MODELS: readonly GeminiModel[] = [
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-2.5-flash",
+];
 const DEFAULT_TIMEOUT_MS = 25_000;
 const MAX_TIMEOUT_MS = 30_000;
 const MAX_INPUT_CHARACTERS = 100_000;
+
+type GeminiRequestParameters = Parameters<
+  GoogleGenAI["models"]["generateContent"]
+>[0];
+type GeminiResponse = Awaited<
+  ReturnType<GoogleGenAI["models"]["generateContent"]>
+>;
 
 export type GeminiJsonInput =
   | string
@@ -37,6 +56,15 @@ export type GenerateStructuredJsonOptions<T> = {
   schema: z.ZodType<T>;
   timeoutMs?: number;
   generation?: GeminiGenerationOptions;
+};
+
+export type GeminiGenerationResult<T> = {
+  value: T;
+  metadata: GeminiGenerationMetadata;
+};
+
+export type GeminiGenerationDependencies = {
+  request: (parameters: GeminiRequestParameters) => Promise<GeminiResponse>;
 };
 
 function normalizeJsonValue(
@@ -134,10 +162,45 @@ function resolveTimeout(timeoutMs: number | undefined): number {
   return resolvedTimeout;
 }
 
-export async function generateStructuredJson<T>(
+function metadata(
+  attemptedModels: readonly GeminiModel[],
+  selectedModel: GeminiModel | null,
+  finalProviderFailure: GeminiGenerationMetadata["finalProviderFailure"],
+): GeminiGenerationMetadata {
+  return {
+    selectedModel,
+    attemptedModels: [...attemptedModels],
+    fallbackUsed: attemptedModels.length > 1,
+    finalProviderFailure,
+  };
+}
+
+function failureCategory(error: GeminiError): GeminiFailureCategory {
+  if (error.code === "GEMINI_TIMEOUT") return "TIMEOUT";
+  return error.metadata?.finalProviderFailure?.category ?? "PERMANENT";
+}
+
+function errorMetadata(
+  error: GeminiError,
+  attemptedModels: readonly GeminiModel[],
+): GeminiGenerationMetadata {
+  return metadata(attemptedModels, null, {
+    code: error.code,
+    category: failureCategory(error),
+    ...(error.metadata?.finalProviderFailure?.httpStatus === undefined
+      ? {}
+      : { httpStatus: error.metadata.finalProviderFailure.httpStatus }),
+  });
+}
+
+export async function generateStructuredJsonWithMetadata<T>(
   options: GenerateStructuredJsonOptions<T>,
-): Promise<T> {
-  const apiKey = requireGeminiApiKey(process.env.GEMINI_API_KEY);
+  dependencies?: GeminiGenerationDependencies,
+): Promise<GeminiGenerationResult<T>> {
+  const apiKey =
+    dependencies === undefined
+      ? requireGeminiApiKey(process.env.GEMINI_API_KEY)
+      : undefined;
 
   if (options.systemInstruction.trim().length === 0) {
     throw new GeminiError(
@@ -155,27 +218,99 @@ export async function generateStructuredJson<T>(
     );
   }
 
-  const model = process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
-  const client = new GoogleGenAI({ apiKey });
-
-  let responseText: string | undefined;
-  try {
-    const response = await client.models.generateContent({
-      model,
-      contents: input,
-      config: {
-        systemInstruction: options.systemInstruction,
-        responseMimeType: "application/json",
-        responseJsonSchema: z.toJSONSchema(options.schema),
-        httpOptions: { timeout: timeoutMs },
-        ...options.generation,
-      },
+  const client =
+    apiKey === undefined ? undefined : new GoogleGenAI({ apiKey });
+  const request =
+    dependencies?.request ??
+    ((parameters: GeminiRequestParameters) => {
+      if (client === undefined) {
+        throw new GeminiError(
+          "GEMINI_CONFIG_ERROR",
+          "Gemini client configuration is unavailable.",
+        );
+      }
+      return client.models.generateContent(parameters);
     });
-    responseText = response.text;
-  } catch (error) {
-    if (error instanceof GeminiError) throw error;
-    throw geminiRequestFailure(error, timeoutMs);
+
+  const attemptedModels: GeminiModel[] = [];
+  for (const model of GEMINI_MODELS) {
+    attemptedModels.push(model);
+    let response: GeminiResponse;
+    try {
+      response = await request({
+        model,
+        contents: input,
+        config: {
+          systemInstruction: options.systemInstruction,
+          responseMimeType: "application/json",
+          responseJsonSchema: z.toJSONSchema(options.schema),
+          httpOptions: {
+            timeout: timeoutMs,
+            retryOptions: { attempts: 1 },
+          },
+          ...options.generation,
+        },
+      });
+    } catch (error) {
+      const requestFailure =
+        error instanceof GeminiError
+          ? new GeminiError(
+              error.code,
+              error.message,
+              error.validationIssues,
+              errorMetadata(error, attemptedModels),
+            )
+          : geminiRequestFailure(error, timeoutMs, model, attemptedModels);
+      const category = failureCategory(requestFailure);
+      const transient = classifyGeminiProviderFailure(error).transient ||
+        ["TIMEOUT", "NETWORK", "RATE_LIMITED", "PROVIDER_UNAVAILABLE"].includes(
+          category,
+        );
+
+      if (!transient) throw requestFailure;
+      if (attemptedModels.length < GEMINI_MODELS.length) continue;
+
+      const finalFailure =
+        requestFailure.metadata?.finalProviderFailure ?? {
+          code: requestFailure.code,
+          category,
+        };
+      throw new GeminiError(
+        "GEMINI_AI_UNAVAILABLE",
+        "Gemini is temporarily unavailable across the configured models.",
+        undefined,
+        metadata(attemptedModels, null, finalFailure),
+      );
+    }
+
+    try {
+      const value = parseStructuredJson(response.text ?? "", options.schema);
+      return {
+        value,
+        metadata: metadata(attemptedModels, model, null),
+      };
+    } catch (error) {
+      if (!(error instanceof GeminiError)) throw error;
+      throw new GeminiError(
+        error.code,
+        error.message,
+        error.validationIssues,
+        errorMetadata(error, attemptedModels),
+      );
+    }
   }
 
-  return parseStructuredJson(responseText ?? "", options.schema);
+  throw new GeminiError(
+    "GEMINI_AI_UNAVAILABLE",
+    "Gemini is temporarily unavailable across the configured models.",
+    undefined,
+    metadata(attemptedModels, null, null),
+  );
+}
+
+export async function generateStructuredJson<T>(
+  options: GenerateStructuredJsonOptions<T>,
+): Promise<T> {
+  const result = await generateStructuredJsonWithMetadata(options);
+  return result.value;
 }

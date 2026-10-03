@@ -5,6 +5,7 @@ import {
   GeminiError,
   generateStructuredJson,
   serializeGeminiInput,
+  type GeminiGenerationMetadata,
   type GenerateStructuredJsonOptions,
 } from "../../ai/gemini";
 import {
@@ -38,6 +39,7 @@ export type RiskAssessmentAgentErrorCode =
   | "RISK_ASSESSMENT_GEMINI_CONFIG_ERROR"
   | "RISK_ASSESSMENT_GEMINI_REQUEST_ERROR"
   | "RISK_ASSESSMENT_GEMINI_TIMEOUT"
+  | "RISK_ASSESSMENT_GEMINI_UNAVAILABLE"
   | "RISK_ASSESSMENT_INVALID_STRUCTURED_OUTPUT"
   | "RISK_ASSESSMENT_SCHEMA_VALIDATION_FAILED"
   | "RISK_ASSESSMENT_FACT_CONFLICT";
@@ -45,16 +47,19 @@ export type RiskAssessmentAgentErrorCode =
 export class RiskAssessmentAgentError extends Error {
   readonly code: RiskAssessmentAgentErrorCode;
   readonly issues: readonly string[] | undefined;
+  readonly geminiGeneration: GeminiGenerationMetadata | undefined;
 
   constructor(
     code: RiskAssessmentAgentErrorCode,
     message: string,
     issues?: readonly string[],
+    geminiGeneration?: GeminiGenerationMetadata,
   ) {
     super(message);
     this.name = "RiskAssessmentAgentError";
     this.code = code;
     this.issues = issues;
+    this.geminiGeneration = geminiGeneration;
   }
 }
 
@@ -129,6 +134,15 @@ function mapGeminiError(error: GeminiError): RiskAssessmentAgentError {
       return new RiskAssessmentAgentError(
         "RISK_ASSESSMENT_GEMINI_TIMEOUT",
         "Risk assessment Gemini request timed out.",
+        undefined,
+        error.metadata,
+      );
+    case "GEMINI_AI_UNAVAILABLE":
+      return new RiskAssessmentAgentError(
+        "RISK_ASSESSMENT_GEMINI_UNAVAILABLE",
+        "Risk assessment is unavailable because all configured Gemini models failed.",
+        undefined,
+        error.metadata,
       );
     case "GEMINI_INVALID_JSON":
     case "GEMINI_EMPTY_RESPONSE":
@@ -141,11 +155,14 @@ function mapGeminiError(error: GeminiError): RiskAssessmentAgentError {
         "RISK_ASSESSMENT_SCHEMA_VALIDATION_FAILED",
         "Gemini risk assessment did not match the required schema.",
         error.validationIssues,
+        error.metadata,
       );
     case "GEMINI_REQUEST_ERROR":
       return new RiskAssessmentAgentError(
         "RISK_ASSESSMENT_GEMINI_REQUEST_ERROR",
         "Risk assessment Gemini request failed.",
+        undefined,
+        error.metadata,
       );
   }
 }

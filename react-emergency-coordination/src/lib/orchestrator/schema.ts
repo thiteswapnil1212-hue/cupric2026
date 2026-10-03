@@ -6,6 +6,7 @@ import { ResourceRoutingAssessmentSchema } from "../agents/resource-routing/sche
 import { RiskAssessmentSchema } from "../agents/risk-assessment/schema";
 import { AlternativeRecommendationSchema } from "../agents/response-planning/schema";
 import type { ResponsePlanningResult as AgentResponsePlanningResult } from "../agents/response-planning/agent";
+import { GeminiGenerationMetadataSchema } from "../ai/gemini-contract";
 
 export const ReactAgentStageSchema = z.enum([
   "risk-assessment",
@@ -50,6 +51,7 @@ export const OrchestrationRecoveryMetadataSchema = z
     usablePlanExists: z.boolean(),
     partialPersistence: z.boolean(),
     recommendation: RecoveryRecommendationSchema,
+    geminiGeneration: GeminiGenerationMetadataSchema.optional(),
   })
   .strict();
 

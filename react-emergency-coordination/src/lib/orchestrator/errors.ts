@@ -4,6 +4,10 @@ import type {
   OrchestrationStatus,
   RecoveryRecommendation,
 } from "./schema";
+import {
+  GeminiGenerationMetadataSchema,
+  type GeminiGenerationMetadata,
+} from "../ai/gemini-contract";
 
 export type ReactOrchestrationErrorCode =
   | "ORCHESTRATOR_INPUT_INVALID"
@@ -28,6 +32,7 @@ export type OrchestrationFailureMetadata = {
   usablePlanExists: boolean;
   partialPersistence: boolean;
   recommendation: RecoveryRecommendation;
+  geminiGeneration?: GeminiGenerationMetadata;
 };
 
 type SafeErrorCause = {
@@ -65,6 +70,11 @@ const stageFailureCodes: Record<
     },
     RISK_ASSESSMENT_GEMINI_REQUEST_ERROR: {
       category: "RISK_ASSESSMENT_FAILED",
+      retryable: false,
+      recommendation: "ABORT",
+    },
+    RISK_ASSESSMENT_GEMINI_UNAVAILABLE: {
+      category: "RISK_ASSESSMENT_FAILED",
       retryable: true,
       recommendation: "RETRY_STAGE",
     },
@@ -101,6 +111,11 @@ const stageFailureCodes: Record<
       recommendation: "RETRY_STAGE",
     },
     RESOURCE_ROUTING_GEMINI_REQUEST_ERROR: {
+      category: "RESOURCE_ROUTING_FAILED",
+      retryable: false,
+      recommendation: "ABORT",
+    },
+    RESOURCE_ROUTING_GEMINI_UNAVAILABLE: {
       category: "RESOURCE_ROUTING_FAILED",
       retryable: true,
       recommendation: "RETRY_STAGE",
@@ -163,6 +178,11 @@ const stageFailureCodes: Record<
       recommendation: "RETRY_STAGE",
     },
     RESPONSE_PLANNING_GEMINI_REQUEST_ERROR: {
+      category: "RESPONSE_PLANNING_FAILED",
+      retryable: false,
+      recommendation: "ABORT",
+    },
+    RESPONSE_PLANNING_GEMINI_UNAVAILABLE: {
       category: "RESPONSE_PLANNING_FAILED",
       retryable: true,
       recommendation: "RETRY_STAGE",
@@ -251,6 +271,9 @@ function metadata(
     usablePlanExists: overrides.usablePlanExists ?? false,
     partialPersistence,
     recommendation: overrides.recommendation ?? "ABORT",
+    ...(overrides.geminiGeneration === undefined
+      ? {}
+      : { geminiGeneration: overrides.geminiGeneration }),
   };
 }
 
@@ -321,6 +344,12 @@ export class ReactOrchestrationStageError extends ReactOrchestrationError {
     const code = getSafeAgentCode(stage, candidateCode);
     const classification = classifyAgentFailure(stage, code);
     const partialPersistence = completedWrites.length > 0;
+    const rawGeminiGeneration =
+      typeof cause === "object" && cause !== null && "geminiGeneration" in cause
+        ? cause.geminiGeneration
+        : undefined;
+    const geminiGeneration =
+      GeminiGenerationMetadataSchema.safeParse(rawGeminiGeneration);
     super(`REACT orchestration failed during the ${stage} stage.`, {
       code: "ORCHESTRATOR_STAGE_FAILED",
       metadata: metadata({
@@ -334,6 +363,9 @@ export class ReactOrchestrationStageError extends ReactOrchestrationError {
         recommendation: partialPersistence
           ? "REPAIR_PERSISTENCE"
           : classification.recommendation,
+        ...(geminiGeneration.success
+          ? { geminiGeneration: geminiGeneration.data }
+          : {}),
       }),
       safeCause: {
         name: "AgentFailure",

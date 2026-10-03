@@ -13,6 +13,7 @@ import {
   GeminiError,
   generateStructuredJson,
   serializeGeminiInput,
+  type GeminiGenerationMetadata,
 } from "../../ai/gemini";
 import { validateEmergencyStateConsistency } from "../../emergency-state/consistency";
 import {
@@ -59,6 +60,7 @@ export type ResponsePlanningAgentErrorCode =
   | "RESPONSE_PLANNING_GEMINI_CONFIG_ERROR"
   | "RESPONSE_PLANNING_GEMINI_REQUEST_ERROR"
   | "RESPONSE_PLANNING_GEMINI_TIMEOUT"
+  | "RESPONSE_PLANNING_GEMINI_UNAVAILABLE"
   | "RESPONSE_PLANNING_INVALID_STRUCTURED_OUTPUT"
   | "RESPONSE_PLANNING_SCHEMA_VALIDATION_FAILED"
   | "RESPONSE_PLANNING_OUTPUT_INVALID"
@@ -68,16 +70,19 @@ export type ResponsePlanningAgentErrorCode =
 export class ResponsePlanningAgentError extends Error {
   readonly code: ResponsePlanningAgentErrorCode;
   readonly issues: readonly string[] | undefined;
+  readonly geminiGeneration: GeminiGenerationMetadata | undefined;
 
   constructor(
     code: ResponsePlanningAgentErrorCode,
     message: string,
     issues?: readonly string[],
+    geminiGeneration?: GeminiGenerationMetadata,
   ) {
     super(message);
     this.name = "ResponsePlanningAgentError";
     this.code = code;
     this.issues = issues;
+    this.geminiGeneration = geminiGeneration;
   }
 }
 
@@ -363,11 +368,22 @@ function mapGeminiError(error: GeminiError): ResponsePlanningAgentError {
       return new ResponsePlanningAgentError(
         "RESPONSE_PLANNING_GEMINI_REQUEST_ERROR",
         "Response planning Gemini request failed.",
+        undefined,
+        error.metadata,
       );
     case "GEMINI_TIMEOUT":
       return new ResponsePlanningAgentError(
         "RESPONSE_PLANNING_GEMINI_TIMEOUT",
         "Response planning Gemini request timed out.",
+        undefined,
+        error.metadata,
+      );
+    case "GEMINI_AI_UNAVAILABLE":
+      return new ResponsePlanningAgentError(
+        "RESPONSE_PLANNING_GEMINI_UNAVAILABLE",
+        "Response planning is unavailable because all configured Gemini models failed.",
+        undefined,
+        error.metadata,
       );
     case "GEMINI_EMPTY_RESPONSE":
     case "GEMINI_INVALID_JSON":
@@ -380,6 +396,7 @@ function mapGeminiError(error: GeminiError): ResponsePlanningAgentError {
         "RESPONSE_PLANNING_SCHEMA_VALIDATION_FAILED",
         "Gemini response plan did not match the required schema.",
         error.validationIssues,
+        error.metadata,
       );
   }
 }
