@@ -564,3 +564,17 @@ button:disabled {
     flex-wrap: wrap;
   }
 }
+
+/* ---- Patch 01: demo clarity (frontend-only) ---- */
+.plan-empty {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 8px; padding: 38px 24px 42px;
+}
+.plan-empty strong { color: var(--foreground); font-size: 13px; font-weight: 600; }
+.plan-empty span { color: var(--muted-foreground); font-size: 11px; line-height: 1.55; max-width: 280px; }
+.plan-empty .decision-buttons { margin-top: 6px; }
+.explainability-column > p.awaiting-data { color: var(--muted-foreground); }
+.agent-standby { opacity: 0.8; }
+.agent-standby .agent-check { color: var(--muted-foreground); background: var(--gray-soft); }
+.agent-state.state-standby { color: var(--muted-foreground) !important; border-color: var(--border); background: var(--gray-soft); }
+.timeline-empty { margin: 0; padding: 8px 0 12px; color: var(--muted-foreground); font-size: 11px; }
