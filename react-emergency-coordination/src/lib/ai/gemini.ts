@@ -56,6 +56,7 @@ export type GenerateStructuredJsonOptions<T> = {
   schema: z.ZodType<T>;
   timeoutMs?: number;
   generation?: GeminiGenerationOptions;
+  onMetadata?: (metadata: GeminiGenerationMetadata) => void;
 };
 
 export type GeminiGenerationResult<T> = {
@@ -268,6 +269,24 @@ export async function generateStructuredJsonWithMetadata<T>(
         );
 
       if (!transient) throw requestFailure;
+      if (category === "RATE_LIMITED") {
+        throw new GeminiError(
+          "GEMINI_AI_UNAVAILABLE",
+          "Gemini quota or rate limits prevent another model request.",
+          undefined,
+          metadata(attemptedModels, null, {
+            code: requestFailure.code,
+            category,
+            ...(requestFailure.metadata?.finalProviderFailure?.httpStatus ===
+            undefined
+              ? {}
+              : {
+                  httpStatus:
+                    requestFailure.metadata.finalProviderFailure.httpStatus,
+                }),
+          }),
+        );
+      }
       if (attemptedModels.length < GEMINI_MODELS.length) continue;
 
       const finalFailure =
@@ -311,6 +330,14 @@ export async function generateStructuredJsonWithMetadata<T>(
 export async function generateStructuredJson<T>(
   options: GenerateStructuredJsonOptions<T>,
 ): Promise<T> {
-  const result = await generateStructuredJsonWithMetadata(options);
-  return result.value;
+  try {
+    const result = await generateStructuredJsonWithMetadata(options);
+    options.onMetadata?.(result.metadata);
+    return result.value;
+  } catch (error) {
+    if (error instanceof GeminiError && error.metadata !== undefined) {
+      options.onMetadata?.(error.metadata);
+    }
+    throw error;
+  }
 }
