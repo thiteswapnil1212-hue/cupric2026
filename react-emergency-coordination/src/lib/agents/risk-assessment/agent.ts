@@ -67,6 +67,9 @@ export type RiskAssessmentAgentDependencies = {
   readonly generateStructuredJson: (
     options: GenerateStructuredJsonOptions<RiskAssessment>,
   ) => Promise<RiskAssessment>;
+  readonly onGenerationMetadata?: (
+    metadata: GeminiGenerationMetadata,
+  ) => void;
 };
 
 function compareIds(left: { id: string }, right: { id: string }): number {
@@ -149,6 +152,8 @@ function mapGeminiError(error: GeminiError): RiskAssessmentAgentError {
       return new RiskAssessmentAgentError(
         "RISK_ASSESSMENT_INVALID_STRUCTURED_OUTPUT",
         "Gemini did not return a usable structured risk assessment.",
+        undefined,
+        error.metadata,
       );
     case "GEMINI_SCHEMA_VALIDATION_FAILED":
       return new RiskAssessmentAgentError(
@@ -217,6 +222,7 @@ export async function runRiskAssessment(
       systemInstruction: riskAssessmentSystemInstruction,
       input: serializeRiskAssessmentFacts(state),
       schema: RiskAssessmentSchema,
+      onMetadata: dependencies.onGenerationMetadata,
     });
   } catch (error) {
     if (error instanceof GeminiError) throw mapGeminiError(error);
