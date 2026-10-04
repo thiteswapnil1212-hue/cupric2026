@@ -16,6 +16,10 @@ import type { GeminiGenerationMetadata } from "../src/lib/ai/gemini-contract";
 import { validatePlan } from "../src/lib/emergency-engine/plan-validator";
 import { getDemoState } from "../src/lib/demo/fixtures";
 import {
+  getServerDemoSnapshot,
+  runServerDemoOperation,
+} from "../src/lib/demo/server-session";
+import {
   applyWhatIfScenario,
   runWhatIfSimulation,
 } from "../src/lib/what-if/service";
@@ -241,6 +245,24 @@ async function main() {
   );
 
   const routeResult = await runScenario(scenarios.ROUTE_BLOCKED);
+  await runServerDemoOperation((controller) => controller.resetDemo());
+  const initialServerSnapshot = await getServerDemoSnapshot();
+  const initialServerWhatIf = await runWhatIfSimulation(
+    original.incident.id,
+    scenarios.ROUTE_BLOCKED,
+    {
+      workflowDependencies: successfulWorkflowDependencies(),
+      now: () => new Date(timestamp),
+    },
+  );
+  assert.equal(initialServerSnapshot.currentPlan, null);
+  assert.equal(initialServerWhatIf.currentPlan, null);
+  assert.deepEqual(initialServerWhatIf.currentState, initialServerSnapshot.state);
+  assert.deepEqual(
+    (await getServerDemoSnapshot()).state,
+    initialServerSnapshot.state,
+  );
+
   const activePlanBaseline = await runWhatIfSimulation(
     original.incident.id,
     scenarios.ROUTE_BLOCKED,
@@ -254,6 +276,50 @@ async function main() {
   assert.equal(activePlanBaseline.currentPlan?.status, "PENDING_APPROVAL");
   assert.equal(activePlanBaseline.currentActions.length, original.activePlan?.actions.length);
   assert.deepEqual(activePlanBaseline.currentState.activePlan, original.activePlan);
+
+  let currentBaseline: EmergencyState = original;
+  const currentBaselineResult = () =>
+    runWhatIfSimulation(
+      original.incident.id,
+      scenarios.AFFECTED_POPULATION_INCREASE,
+      {
+        loadState: async () => currentBaseline,
+        workflowDependencies: successfulWorkflowDependencies(),
+        now: () => new Date(timestamp),
+      },
+    );
+  const firstPlanResult = await currentBaselineResult();
+  assert.equal(firstPlanResult.currentPlan?.id, "PLAN-001");
+  assert.deepEqual(firstPlanResult.currentState, original);
+
+  currentBaseline = getDemoState("replanned").state;
+  const planTwoBefore = structuredClone(currentBaseline);
+  const planTwoResult = await currentBaselineResult();
+  assert.equal(planTwoResult.currentPlan?.id, "PLAN-002");
+  assert.equal(planTwoResult.currentPlan?.status, "PENDING_APPROVAL");
+  assert.deepEqual(planTwoResult.currentState, planTwoBefore);
+  assert.equal(
+    planTwoResult.hypotheticalState.routes.find((route) => route.id === "R1")
+      ?.status,
+    "BLOCKED",
+  );
+  assert.equal(
+    planTwoResult.hypotheticalState.routes.find((route) => route.id === "R2")
+      ?.status,
+    "OPEN",
+  );
+  const planTwoR2Blocked = applyWhatIfScenario(
+    currentBaseline,
+    createRouteBlockedScenario("R2"),
+    timestamp,
+  );
+  assert.equal(
+    planTwoR2Blocked.hypotheticalState.routes.find((route) => route.id === "R2")
+      ?.status,
+    "BLOCKED",
+  );
+  assert.deepEqual(currentBaseline, planTwoBefore);
+
   for (const status of ["APPROVED", "COMPLETED", "REJECTED"] as const) {
     const terminalPlanBaseline = await runWhatIfSimulation(
       original.incident.id,
