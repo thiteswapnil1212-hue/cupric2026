@@ -62,7 +62,7 @@ const oversizedRequest = await handleAiWorkflowRequest(
 assert.equal(oversizedRequest.status, 413);
 assert.equal(responsePlanSourceLabel(undefined), "SOURCE UNAVAILABLE");
 assert.notEqual(responsePlanSourceLabel(undefined), "AI RECOMMENDATION");
-assert.equal(responsePlanSourceLabel("DETERMINISTIC_FALLBACK"), "DETERMINISTIC FALLBACK");
+assert.equal(responsePlanSourceLabel("DETERMINISTIC_FALLBACK"), "BUILT-IN EMERGENCY RULES");
 for (const source of ["GEMINI", "DETERMINISTIC_FALLBACK", "UNKNOWN"] as const) {
   const encoded = encodePlanSource("source-safe rationale", source);
   assert.deepEqual(decodePlanSource(encoded), {
@@ -514,7 +514,7 @@ assert.equal(quota.responsePlanningResult.validation.valid, true);
 const quotaApproval = submitPlanForApproval(quota.responsePlanningResult.plan);
 assert.equal(quotaApproval.success, true);
 if (quotaApproval.success) assert.equal(quotaApproval.plan.status, "PENDING_APPROVAL");
-assert.equal(responsePlanSourceLabel(quota.responsePlanningResult.plan.source), "DETERMINISTIC FALLBACK");
+assert.equal(responsePlanSourceLabel(quota.responsePlanningResult.plan.source), "BUILT-IN EMERGENCY RULES");
 
 const projectQuota = await runAutoAiWorkflow(
   initial,
