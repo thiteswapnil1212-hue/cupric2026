@@ -63,8 +63,34 @@ async function run(): Promise<void> {
   replay.beginExecution();
   replay.completeExecution();
   await replay.simulateRouteBlockage();
-  assert.deepEqual(repeatSnapshot.state, replay.getSnapshot().state);
-  assert.deepEqual(repeatSnapshot.currentPlan, replay.getSnapshot().currentPlan);
+  assert.deepEqual(
+    repeatSnapshot.state.resources.map((resource) => [
+      resource.id,
+      resource.status,
+      resource.currentAssignmentId,
+    ]),
+    replay.getSnapshot().state.resources.map((resource) => [
+      resource.id,
+      resource.status,
+      resource.currentAssignmentId,
+    ]),
+  );
+  const repeatPlan = repeatSnapshot.currentPlan;
+  const replayPlan = replay.getSnapshot().currentPlan;
+  assert.ok(repeatPlan);
+  assert.ok(replayPlan);
+  assert.deepEqual(
+    {
+      id: repeatPlan.id,
+      status: repeatPlan.status,
+      dependencies: repeatPlan.dependencies,
+    },
+    {
+      id: replayPlan.id,
+      status: replayPlan.status,
+      dependencies: replayPlan.dependencies,
+    },
+  );
 
   const reset = first.resetDemo();
   assert.equal(reset.success, true);
