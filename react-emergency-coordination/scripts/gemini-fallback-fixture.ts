@@ -31,8 +31,11 @@ function mockResponse(value: unknown): MockResponse {
   return { text: JSON.stringify(value) } as MockResponse;
 }
 
-function providerError(status: number): Error & { status: number } {
-  return Object.assign(new Error("private provider response"), { status });
+function providerError(
+  status: number,
+  message = "private provider response",
+): Error & { status: number } {
+  return Object.assign(new Error(message), { status });
 }
 
 function requestMock(
@@ -138,9 +141,9 @@ async function main(): Promise<void> {
           throw providerError(status);
         }, calls),
       ),
-      "GEMINI_REQUEST_ERROR",
+      "GEMINI_AI_UNAVAILABLE",
     );
-    assert.deepEqual(calls, [models[0]]);
+    assert.deepEqual(calls, models);
     assert.equal(error.metadata?.finalProviderFailure?.httpStatus, status);
     assert.equal(error.metadata?.finalProviderFailure?.category, "PERMANENT");
   }
@@ -164,12 +167,145 @@ async function main(): Promise<void> {
   result = await generateStructuredJsonWithMetadata(
     schemaOptions,
     requestMock(async (model) => {
-      if (model === models[0]) throw providerError(429);
+      if (model === models[0]) throw providerError(429, "model-specific quota exceeded");
       return mockResponse(expected);
     }, calls),
   );
   assert.deepEqual(calls, models.slice(0, 2));
   assert.equal(result.metadata.selectedModel, models[1]);
+  assert.deepEqual(result.metadata.modelFailures, [
+    {
+      model: models[0],
+      code: "GEMINI_REQUEST_ERROR",
+      category: "RATE_LIMITED",
+      httpStatus: 429,
+    },
+  ]);
+
+  calls = [];
+  result = await generateStructuredJsonWithMetadata(
+    schemaOptions,
+    requestMock(async (model) => {
+      if (model === models[0]) throw providerError(503);
+      if (model === models[1]) throw providerError(429, "model quota exceeded");
+      return mockResponse(expected);
+    }, calls),
+  );
+  assert.deepEqual(calls, models);
+  assert.equal(result.metadata.selectedModel, models[2]);
+  assert.deepEqual(
+    result.metadata.modelFailures?.map(({ model, category }) => ({
+      model,
+      category,
+    })),
+    [
+      { model: models[0], category: "PROVIDER_UNAVAILABLE" },
+      { model: models[1], category: "RATE_LIMITED" },
+    ],
+  );
+
+  calls = [];
+  result = await generateStructuredJsonWithMetadata(
+    schemaOptions,
+    requestMock(async (model) =>
+      model === models[0]
+        ? ({ text: "{" } as MockResponse)
+        : mockResponse(expected), calls),
+  );
+  assert.deepEqual(calls, models.slice(0, 2));
+  assert.equal(result.metadata.selectedModel, models[1]);
+  assert.equal(result.metadata.modelFailures?.[0]?.code, "GEMINI_INVALID_JSON");
+
+  calls = [];
+  result = await generateStructuredJsonWithMetadata(
+    schemaOptions,
+    requestMock(async (model) =>
+      model !== models[2]
+        ? ({ text: "not-json" } as MockResponse)
+        : mockResponse(expected), calls),
+  );
+  assert.deepEqual(calls, models);
+  assert.equal(result.metadata.selectedModel, models[2]);
+
+  calls = [];
+  error = await expectGeminiError(
+    generateStructuredJsonWithMetadata(
+      schemaOptions,
+      requestMock(async () => ({ text: "{" } as MockResponse), calls),
+    ),
+    "GEMINI_INVALID_JSON",
+  );
+  assert.deepEqual(calls, models);
+  assert.deepEqual(error.metadata?.attemptedModels, models);
+  assert.equal(error.metadata?.modelFailures?.length, 3);
+  assert.equal(error.metadata?.finalProviderFailure?.category, "PERMANENT");
+
+  calls = [];
+  error = await expectGeminiError(
+    generateStructuredJsonWithMetadata(
+      schemaOptions,
+      requestMock(
+        async () => {
+          throw providerError(
+            429,
+            "Project-wide quota exhausted; all models are blocked.",
+          );
+        },
+        calls,
+      ),
+    ),
+    "GEMINI_AI_UNAVAILABLE",
+  );
+  assert.deepEqual(calls, [models[0]]);
+  assert.equal(
+    error.metadata?.finalProviderFailure?.category,
+    "PROJECT_QUOTA_EXHAUSTED",
+  );
+  assert.equal(
+    error.metadata?.modelFailures?.[0]?.category,
+    "PROJECT_QUOTA_EXHAUSTED",
+  );
+
+  calls = [];
+  error = await expectGeminiError(
+    generateStructuredJsonWithMetadata(
+      schemaOptions,
+      requestMock(async () => {
+        throw Object.assign(new Error("RESOURCE_EXHAUSTED"), {
+          status: 429,
+          error: {
+            details: [
+              {
+                quotaId: "GenerateRequestsPerDayPerProject",
+                quotaDimensions: { location: "global" },
+              },
+            ],
+          },
+        });
+      }, calls),
+    ),
+    "GEMINI_AI_UNAVAILABLE",
+  );
+  assert.deepEqual(calls, [models[0]]);
+  assert.equal(
+    error.metadata?.finalProviderFailure?.category,
+    "PROJECT_QUOTA_EXHAUSTED",
+  );
+
+  const fakeSecret = "AIzaSyDUMMY_FIXTURE_SECRET_NEVER_LOG";
+  calls = [];
+  error = await expectGeminiError(
+    generateStructuredJsonWithMetadata(
+      schemaOptions,
+      requestMock(async () => {
+        throw providerError(503, `provider failure ${fakeSecret}`);
+      }, calls),
+    ),
+    "GEMINI_AI_UNAVAILABLE",
+  );
+  assert.deepEqual(calls, models);
+  assert.equal(JSON.stringify(error).includes(fakeSecret), false);
+  assert.equal(error.message.includes(fakeSecret), false);
 
   calls = [];
   result = await generateStructuredJsonWithMetadata(
@@ -194,8 +330,8 @@ async function main(): Promise<void> {
     ),
     "GEMINI_SCHEMA_VALIDATION_FAILED",
   );
-  assert.deepEqual(calls, [models[0]]);
-  assert.equal(error.metadata?.fallbackUsed, false);
+  assert.deepEqual(calls, models);
+  assert.equal(error.metadata?.fallbackUsed, true);
 
   const emergencyState = getDemoState("initial").state;
   const agentFailure = allUnavailableError;
