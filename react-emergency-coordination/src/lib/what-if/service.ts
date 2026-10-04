@@ -39,17 +39,8 @@ export type WhatIfSimulationDependencies = {
   baselineState?: EmergencyState;
 };
 
-function currentActivePlan(state: EmergencyState): EmergencyState["activePlan"] {
-  const plan = state.activePlan;
-  if (
-    plan === null ||
-    (plan.status !== "PENDING_APPROVAL" &&
-      plan.status !== "APPROVED" &&
-      plan.status !== "EXECUTING")
-  ) {
-    return null;
-  }
-  return plan;
+function currentPlan(state: EmergencyState): EmergencyState["activePlan"] {
+  return state.activePlan;
 }
 
 async function loadServerOwnedWhatIfState(
@@ -298,7 +289,7 @@ export async function runWhatIfSimulation(
       validation,
     },
   };
-  const activePlan = currentActivePlan(currentState);
+  const realPlan = currentPlan(currentState);
   return WhatIfSimulationResultSchema.parse({
     simulationId,
     scenario,
@@ -306,15 +297,15 @@ export async function runWhatIfSimulation(
     stateVersion: currentState.stateVersion,
     currentState,
     hypotheticalState,
-    currentPlan: activePlan,
+    currentPlan: realPlan,
     currentPlanValidationValid:
-      activePlan === null
+      realPlan === null
         ? null
-        : validatePlan(activePlan, currentState).valid,
+        : validatePlan(realPlan, currentState).valid,
     currentActions:
-      activePlan === null
+      realPlan === null
         ? []
-        : activePlan.actions.map((reference) => {
+        : realPlan.actions.map((reference) => {
             const action = currentState.planActions.find(
               (candidate) =>
                 candidate.id === reference.actionId &&
