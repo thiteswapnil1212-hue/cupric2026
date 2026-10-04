@@ -56,6 +56,25 @@ async function run(): Promise<void> {
   assert.equal(controller.getSnapshot().stage, "COMPLETED");
   assert.equal(controller.getSnapshot().currentPlan?.status, "COMPLETED");
   assert.equal(controller.getSnapshot().planHistory[0]?.status, "COMPLETED");
+  const planOneEvents = controller.getSnapshot().stateChanges.filter(
+    (change) => change.entityType === "PLAN" && change.entityId === "PLAN-001",
+  );
+  const planOneApproval = planOneEvents.find((change) =>
+    change.description.includes("approved by the coordinator"),
+  );
+  const planOneExecution = planOneEvents.find((change) =>
+    change.description.includes("execution completed"),
+  );
+  assert.ok(planOneApproval);
+  assert.ok(planOneExecution);
+  assert.ok(
+    Date.parse(controller.getSnapshot().currentPlan!.generatedAt) <=
+      Date.parse(planOneApproval.occurredAt),
+  );
+  assert.ok(
+    Date.parse(planOneApproval.occurredAt) <=
+      Date.parse(planOneExecution.occurredAt),
+  );
 
   const blockage = await controller.simulateRouteBlockage();
   assert.equal(blockage.success, true);
@@ -98,6 +117,13 @@ async function run(): Promise<void> {
   if (!rejectedExecution.success) assert.equal(rejectedExecution.error.code, "PLAN_NOT_EXECUTABLE");
   assert.equal(rejectedController.rejectCurrentPlan("Route plan is unsafe.").success, true);
   assert.equal(rejectedController.getSnapshot().currentPlan?.status, "REJECTED");
+  assert.equal(rejectedController.getSnapshot().humanDecision?.reason, "Route plan is unsafe.");
+  assert.equal(
+    rejectedController.getSnapshot().stateChanges.some((change) =>
+      change.description.includes("Route plan is unsafe."),
+    ),
+    true,
+  );
   assert.equal(rejectedController.beginExecution().success, false);
   assert.equal(rejectedController.resetDemo().success, true);
   assert.equal((await rejectedController.startDemo()).success, true);

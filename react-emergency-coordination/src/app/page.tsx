@@ -42,7 +42,7 @@ function planStatusTone(status: NonNullable<DashboardViewModel["activePlan"]>["s
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" }).format(new Date(value));
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value));
 }
 
 function resourceRows(resources: DashboardResource[]) {
@@ -99,15 +99,28 @@ function timelineRows(items: DashboardTimelineItem[], idle: boolean) {
   return items.map((item) => <div className={`timeline-item timeline-tone-${item.tone}`} key={item.id}><time>{item.timeLabel}</time><span className={`timeline-marker marker-${item.tone}`} /><div><strong>{item.title}</strong><span>{item.detail}</span></div></div>);
 }
 
-function PlanHistory({ plans }: { plans: DemoSnapshot["planHistory"] }) {
+function PlanHistory({
+  plans,
+  currentPlan,
+  humanDecision,
+}: {
+  plans: DemoSnapshot["planHistory"];
+  currentPlan: DemoSnapshot["currentPlan"];
+  humanDecision: DashboardViewModel["humanDecision"];
+}) {
   if (plans.length === 0) return null;
   return <details className="plan-history">
     <summary>Plan history ({plans.length})</summary>
-    <ol>{[...plans].reverse().map((historyPlan) => <li key={`${historyPlan.id}-${historyPlan.updatedAt}`}>
-      <strong>{historyPlan.id}</strong>
-      <span className={`status-badge badge-${planStatusTone(historyPlan.status)}`}>{historyPlan.status.replaceAll("_", " ")}</span>
-      <time>{formatTime(historyPlan.updatedAt)}</time>
-    </li>)}</ol>
+    <ol>{[...plans].reverse().map((historyPlan) => {
+      const displayedPlan =
+        currentPlan?.id === historyPlan.id ? currentPlan : historyPlan;
+      return <li key={`${displayedPlan.id}-${displayedPlan.updatedAt}`}>
+        <strong>{displayedPlan.id}</strong>
+        <span className={`status-badge badge-${planStatusTone(displayedPlan.status)}`}>{displayedPlan.status.replaceAll("_", " ")}</span>
+        <time>{formatTime(displayedPlan.updatedAt)}</time>
+        {humanDecision?.decision === "REJECT" && humanDecision.planId === displayedPlan.id && <span>Reason: {humanDecision.reason}</span>}
+      </li>;
+    })}</ol>
   </details>;
 }
 
@@ -164,6 +177,8 @@ function PlanningActivity({
   const whatIf = variant === "WHAT_IF";
   const complete =
     riskReady && routingReady && planningReady && validation === true;
+  const showReadyBanner =
+    whatIf ? complete : humanReviewPending && complete;
   const steps = [
     { label: "Risk Assessment", detail: "Assessing emergency severity and priorities", done: riskReady },
     { label: "Resource & Routing", detail: "Evaluating available resources and route feasibility", done: routingReady },
@@ -205,10 +220,10 @@ function PlanningActivity({
               </li>
             ))}
           </ol>
-          <div className={`planning-ready${complete ? " planning-ready-complete" : " planning-ready-incomplete"}`} role="status">
-            <strong>{complete ? whatIf ? "HYPOTHETICAL PLAN READY" : "RESPONSE PLAN READY" : validation === false ? "VALIDATION DID NOT PASS" : "PLAN STATUS UNAVAILABLE"}</strong>
-            <span>{whatIf ? "Simulated only · cannot be approved or executed" : complete && humanReviewPending ? "AI-generated recommendation · awaiting human coordinator review" : complete ? "Workflow result is available for review" : "Review the workflow result before taking action"}</span>
-          </div>
+          {(showReadyBanner || validation === false) && <div className={`planning-ready${complete ? " planning-ready-complete" : " planning-ready-incomplete"}`} role="status">
+            <strong>{complete ? whatIf ? "HYPOTHETICAL PLAN READY" : "RESPONSE PLAN READY" : "VALIDATION DID NOT PASS"}</strong>
+            <span>{whatIf ? "Simulated only · cannot be approved or executed" : complete ? "AI-generated recommendation · awaiting human coordinator review" : "Review the workflow result before taking action"}</span>
+          </div>}
         </>
       )}
     </section>
@@ -246,6 +261,7 @@ function WhatIfPanel({
   selectedScenario,
   status,
   result,
+  realPlanValidationValid,
   history,
   error,
   onSelect,
@@ -256,6 +272,7 @@ function WhatIfPanel({
   selectedScenario: WhatIfScenario | null;
   status: WhatIfStatus;
   result: WhatIfSimulationResult | null;
+  realPlanValidationValid: boolean | null;
   history: readonly WhatIfSimulationResult[];
   error: string | null;
   onSelect: (scenario: WhatIfScenario) => void;
@@ -266,6 +283,10 @@ function WhatIfPanel({
   const hypotheticalPlan = result?.workflowResult.responsePlanningResult.plan ?? null;
   const hypotheticalActions =
     result?.workflowResult.responsePlanningResult.actions ?? [];
+  const realPlanValidation =
+    result === null || result.currentPlan === null
+      ? null
+      : realPlanValidationValid ?? result.currentPlanValidationValid;
   return (
     <section className="panel what-if-panel" id="what-if" aria-labelledby="what-if-title">
       <div className="what-if-heading">
@@ -341,15 +362,17 @@ function WhatIfPanel({
           </div>
           <div className="what-if-comparison">
             <article className="what-if-plan-card what-if-real">
-              <span className="what-if-card-label">REAL / ACTIVE RESPONSE</span>
-              <h4>{result.currentPlan ? `Current active plan: ${result.currentPlan.id}` : "No active plan"}</h4>
+              <span className="what-if-card-label">REAL RESPONSE BASELINE</span>
+              <h4>{result.currentPlan?.status === "PENDING_APPROVAL"
+                ? `Proposed plan (pending approval): ${result.currentPlan.id}`
+                : result.currentPlan ? `Plan: ${result.currentPlan.id}` : "No active plan"}</h4>
               <p>{result.currentPlan?.status.replaceAll("_", " ") ?? "Real emergency baseline"}</p>
               <dl>
                 <div><dt>Route</dt><dd>{dependencyNames(result.currentState, result.currentActions, "routeIds")}</dd></div>
                 <div><dt>Facility</dt><dd>{dependencyNames(result.currentState, result.currentActions, "facilityIds")}</dd></div>
                 <div><dt>Resources</dt><dd>{dependencyNames(result.currentState, result.currentActions, "resourceIds")}</dd></div>
                 <div><dt>Plan source</dt><dd>{result.currentPlan ? responsePlanSourceLabel(result.currentPlan.source) : "Not available"}</dd></div>
-                <div><dt>Validation</dt><dd>{result.currentPlanValidationValid === null ? "Not available" : result.currentPlanValidationValid ? "VALID" : "INVALID"}</dd></div>
+                <div><dt>Validation</dt><dd>{realPlanValidation === null ? "Not available" : realPlanValidation ? "VALID" : "INVALID"}</dd></div>
               </dl>
             </article>
             <article className="what-if-plan-card what-if-simulated">
@@ -418,7 +441,7 @@ function ExplainabilityPanel({ model, snapshot }: { model: DashboardViewModel; s
       <div className="explainability-column"><span className="eyebrow">RESPONSE PLANNING</span>{planning ? <><div className="fact-block"><span>Primary plan</span><strong>{planning.plan.id}</strong></div><div className="fact-block"><span>Priority actions</span><strong>{planning.actions.map((action) => action.description).join(" · ")}</strong></div><div className="fact-block"><span>Rationale</span><strong>{planning.reasoning}</strong></div></> : <p className="awaiting-data">{idle ? "Awaiting demo start" : "DATA UNAVAILABLE"}</p>}</div>
       <div className="explainability-column"><span className="eyebrow">SYSTEM VALIDATION</span>{validation ? <><div className="validation-state"><StatusDot tone={validation.valid ? "green" : "red"} /><strong>{validation.valid ? "VALID" : "INVALID"}</strong></div>{validation.valid ? <div className="fact-block"><span>Checks</span><strong>Resources available · No duplicate assignments · Facility capacity sufficient · Route operational · State version current · Dependencies consistent</strong></div> : <div className="fact-block"><span>Errors</span><strong>{validation.errors.map((error) => error.message).join(" · ")}</strong></div>}</> : <p className="awaiting-data">{idle ? "Awaiting demo start" : "VALIDATION NOT AVAILABLE"}</p>}</div>
     </div>
-    <div className="explainability-footer"><div><span className="eyebrow">HUMAN DECISION</span><strong>{idle ? "Not recorded" : model.humanDecision ? `${model.humanDecision.decision} by ${model.humanDecision.coordinatorId}` : model.approvalAvailable ? "PENDING APPROVAL" : "Not recorded"}</strong></div><div><span className="eyebrow">EXECUTION STATE</span><strong>{idle ? "No active plan" : model.activePlan?.status ?? "No active plan"}</strong></div>{!idle && model.previousPlan && <div><span className="eyebrow">REPLANNING</span><strong>{model.previousPlan.id} → {model.activePlan?.id} · {model.reassessment.routeId} affected</strong></div>}</div>
+    <div className="explainability-footer"><div><span className="eyebrow">HUMAN DECISION</span><strong>{idle ? "Not recorded" : model.humanDecision ? `${model.humanDecision.decision} by ${model.humanDecision.coordinatorId}` : model.approvalAvailable ? "PENDING APPROVAL" : "Not recorded"}</strong></div><div><span className="eyebrow">EXECUTION STATE</span><strong>{idle ? "No active plan" : model.activePlan?.status ?? "No active plan"}</strong></div>{!idle && model.previousPlan && (model.activePlan?.status === "PENDING_APPROVAL" || model.activePlan?.status === "APPROVED") && <div><span className="eyebrow">REPLANNING</span><strong>{model.previousPlan.id} → {model.activePlan.id} · {model.reassessment.routeId} affected</strong></div>}</div>
   </section>;
 }
 
@@ -444,8 +467,16 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
   onWhatIfRetry: () => void;
 }) {
   const [rejectReason, setRejectReason] = useState("");
-  const [dismissedAlertRoute, setDismissedAlertRoute] = useState<string | null>(null);
   const plan = snapshot.currentPlan;
+  const planStatus = plan?.status;
+  const isPendingApproval = planStatus === "PENDING_APPROVAL";
+  const isApproved = planStatus === "APPROVED";
+  const isCompleted = planStatus === "COMPLETED";
+  const isRejected = planStatus === "REJECTED";
+  const showReplanningState =
+    model.previousPlan !== null && (isPendingApproval || isApproved);
+  const showDependencyNotice =
+    showReplanningState && isPendingApproval && model.reassessment.required;
   const whatIfPlan =
     whatIfStatus === "COMPLETE"
       ? whatIfResult?.workflowResult.responsePlanningResult.plan ?? null
@@ -465,12 +496,8 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
       : planSource === "UNKNOWN"
         ? "Source metadata unavailable; this plan is not represented as AI-generated."
         : plan?.summary ?? "";
-  const approvalAvailable = (snapshot.stage === "AWAITING_APPROVAL" || snapshot.stage === "AWAITING_REVISED_APPROVAL") && plan?.status === "PENDING_APPROVAL";
-  const executionAvailable = snapshot.stage === "AWAITING_EXECUTION" && plan?.status === "APPROVED";
-  const alertVisible = model.reassessment.required && model.reassessment.routeId !== dismissedAlertRoute;
-  const routeCount = model.routes.filter((route) => route.status !== "OPEN").length;
-  const activeResources = model.resources.filter((resource) => resource.status !== "UNAVAILABLE" && resource.status !== "OUT_OF_SERVICE").length;
-  const availableFacilities = model.facilities.filter((facility) => facility.status === "OPERATIONAL" || facility.status === "LIMITED").length;
+  const approvalAvailable = (snapshot.stage === "AWAITING_APPROVAL" || snapshot.stage === "AWAITING_REVISED_APPROVAL") && isPendingApproval;
+  const executionAvailable = snapshot.stage === "AWAITING_EXECUTION" && isApproved;
   const planRouteDependencies = plan?.dependencies.routeIds.map((routeId) => ({
     id: routeId,
     route: model.routes.find((route) => route.id === routeId),
@@ -496,22 +523,28 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
     pendingWorkflowKind !== null ||
     snapshot.responsePlanningResult !== null;
   const commandStatus =
-    snapshot.stage === "REASSESSING"
+    snapshot.error
+      ? snapshot.progress.label.toUpperCase()
+      : snapshot.stage === "REASSESSING" ||
+          snapshot.stage === "SITUATION_CHANGED" ||
+          snapshot.stage === "CHANGE_DETECTED"
       ? "REASSESSING"
       : snapshot.stage === "EXECUTING" || snapshot.stage === "EXECUTING_REVISED_PLAN"
         ? "EXECUTING"
-        : snapshot.stage === "AWAITING_EXECUTION"
-          ? "READY TO EXECUTE"
-          : snapshot.stage === "AWAITING_APPROVAL" || snapshot.stage === "AWAITING_REVISED_APPROVAL"
-          ? "AWAITING HUMAN APPROVAL"
-          : snapshot.stage === "COMPLETED"
-            ? "MONITORING"
-            : snapshot.stage === "IDLE"
-              ? "READY"
-              : snapshot.progress.label.toUpperCase();
+        : isPendingApproval
+          ? "PENDING APPROVAL"
+          : isApproved
+            ? "APPROVED"
+            : isCompleted
+              ? "COMPLETED"
+              : isRejected
+                ? "REJECTED"
+          : snapshot.stage === "IDLE"
+            ? "READY"
+            : snapshot.progress.label.toUpperCase();
   const commandStatusTone = snapshot.error
     ? "red"
-    : commandStatus === "REASSESSING" || commandStatus === "AWAITING HUMAN APPROVAL"
+    : commandStatus === "REASSESSING" || commandStatus === "PENDING APPROVAL"
       ? "amber"
       : commandStatus === "EXECUTING"
         ? "blue"
@@ -538,6 +571,7 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
           selectedScenario={whatIfSelectedScenario}
           status={whatIfStatus}
           result={whatIfResult}
+          realPlanValidationValid={snapshot.validation?.valid ?? null}
           history={whatIfHistory}
           error={whatIfError}
           onSelect={onWhatIfSelect}
@@ -545,7 +579,7 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
           onClose={onWhatIfClose}
           onRetry={onWhatIfRetry}
         />
-        {alertVisible && <div className="reassessment-alert" role="alert"><div className="alert-icon"><AlertTriangle size={17} /></div><div className="alert-copy"><strong>Plan reassessment required</strong><span>{model.reassessment.routeId} is blocked and affects the active response plan.</span></div><div className="alert-detail"><span>Affected dependency</span><strong>{model.reassessment.routeId}</strong></div><div className="alert-detail"><span>Revised plan</span><strong>{model.reassessment.revisedPlanId}</strong></div><button className="alert-dismiss" aria-label="Dismiss reassessment notice" onClick={() => setDismissedAlertRoute(model.reassessment.routeId)}><X size={16} /></button></div>}
+        {showDependencyNotice && <div className="reassessment-alert" role="status"><div className="alert-icon"><AlertTriangle size={17} /></div><div className="alert-copy"><strong>Plan reassessment required</strong><span>{model.reassessment.routeId} is blocked and affects the active response plan.</span></div><div className="alert-detail"><span>Affected dependency</span><strong>{model.reassessment.routeId}</strong></div><div className="alert-detail"><span>Revised plan</span><strong>{model.reassessment.revisedPlanId}</strong></div></div>}
         <div className="primary-grid">
           <section className={`panel map-panel${mapModel.reassessment.required ? " map-reassessment" : ""}${whatIfPlan ? " map-what-if" : ""}`} id="map">
             <PanelHeading eyebrow={whatIfPlan ? "WHAT-IF SIMULATION · PRESENTATION OVERLAY" : "SITUATIONAL AWARENESS"} title={whatIfPlan ? "Hypothetical operational map" : "Operational map"} />
@@ -562,7 +596,7 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
             <div className="map-footer"><span><StatusDot tone="red" />{mapModel.routes.filter((route) => route.status !== "OPEN").length} blocked routes</span><span><StatusDot />{mapModel.resources.filter((resource) => resource.status !== "UNAVAILABLE" && resource.status !== "OUT_OF_SERVICE").length} resources active</span><span><StatusDot tone="blue" />{mapModel.facilities.filter((facility) => facility.status === "OPERATIONAL" || facility.status === "LIMITED").length} facilities available</span></div>
           </section>
           <section className={`panel plan-panel${approvalAvailable ? " plan-awaiting-approval" : executionAvailable ? " plan-ready-to-execute" : snapshot.stage.startsWith("EXECUTING") ? " plan-executing" : ""}`} id="plans">
-            <PanelHeading eyebrow="ACTIVE RESPONSE PLAN" title={plan?.id ?? "NO ACTIVE RESPONSE PLAN"} />
+            <PanelHeading eyebrow={isApproved || isCompleted ? "ACTIVE RESPONSE PLAN" : "RESPONSE PLAN"} title={plan?.id ?? "NO ACTIVE RESPONSE PLAN"} />
             {activityVisible && <PlanningActivity
               variant={whatIfActivityVisible ? "WHAT_IF" : "LIVE"}
               pending={whatIfStatus === "SIMULATING" || pendingWorkflowKind !== null}
@@ -571,13 +605,13 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
               routingReady={planningResult?.resourceRoutingAssessment !== null && planningResult?.resourceRoutingAssessment !== undefined}
               planningReady={planningResult?.responsePlanningResult !== null && planningResult?.responsePlanningResult !== undefined}
               validation={activityValidation}
-              previousPlanId={whatIfActivityVisible ? null : model.previousPlan?.id ?? (pendingWorkflowKind === "REASSESSING" ? snapshot.currentPlan?.id ?? null : null)}
+              previousPlanId={whatIfActivityVisible ? null : showReplanningState ? model.previousPlan?.id ?? null : pendingWorkflowKind === "REASSESSING" ? snapshot.currentPlan?.id ?? null : null}
               currentPlanId={whatIfActivityVisible ? null : plan?.id ?? null}
-              affectedRoute={!whatIfActivityVisible && changedRoute && changedRoute.status !== "OPEN" ? { id: changedRoute.id, statusLabel: changedRoute.statusLabel } : null}
+              affectedRoute={!whatIfActivityVisible && showReplanningState && changedRoute && changedRoute.status !== "OPEN" ? { id: changedRoute.id, statusLabel: changedRoute.statusLabel } : null}
               humanReviewPending={!whatIfActivityVisible && approvalAvailable}
             />}
             {model.previousPlan && <div className="previous-plan-state"><span>PREVIOUS PLAN</span><strong>{model.previousPlan.id}</strong><span>{model.previousPlan.status.replaceAll("_", " ")}</span></div>}
-            {snapshot.planHistory.length > 0 && <PlanHistory plans={snapshot.planHistory} />}
+            {snapshot.planHistory.length > 0 && <PlanHistory plans={snapshot.planHistory} currentPlan={plan} humanDecision={model.humanDecision} />}
             <div className="plan-content" key={plan?.id ?? "empty"}>
             {plan ? (
               <>
@@ -602,13 +636,14 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
                     {plan.status.replaceAll("_", " ")}
                   </span>
                 </div>
-                <div className={`plan-callout${model.reassessment.required ? " plan-callout-affected" : ""}`}>
+                <div className={`plan-callout${showDependencyNotice ? " plan-callout-affected" : ""}`}>
                   <div className="callout-icon"><AlertTriangle size={15} /></div>
                   <div>
-                    <strong>{model.reassessment.required ? "Dependency affected" : planSource === "UNKNOWN" ? "Plan source unavailable" : planSource === "DETERMINISTIC_FALLBACK" ? "Deterministic fallback" : "AI recommendation ready"}</strong>
-                    <span>{model.reassessment.required ? `${model.reassessment.routeId} is no longer usable. Review the revised plan.` : planSourceSummary}</span>
+                    <strong>{showDependencyNotice ? "Dependency affected" : planSource === "UNKNOWN" ? "Plan source unavailable" : planSource === "DETERMINISTIC_FALLBACK" ? "Deterministic fallback" : "AI recommendation ready"}</strong>
+                    <span>{showDependencyNotice ? `${model.reassessment.routeId} is no longer usable. Review the revised plan.` : planSourceSummary}</span>
                   </div>
                 </div>
+                {isRejected && model.humanDecision?.decision === "REJECT" && model.humanDecision.planId === plan.id && <p className="plan-rejection-reason"><strong>Rejection reason:</strong> {model.humanDecision.reason}</p>}
                 <div className="plan-actions">
                   {model.actions.map((action) => (
                     <div className={`plan-action${action.routeIds.some((routeId: string) => model.routes.find((route) => route.id === routeId)?.status !== "OPEN") ? " plan-action-affected" : ""}`} key={action.id}>

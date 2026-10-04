@@ -238,7 +238,29 @@ async function main() {
     },
   );
   assert.equal(activePlanBaseline.currentPlan?.id, original.activePlan?.id);
+  assert.equal(activePlanBaseline.currentPlan?.status, "PENDING_APPROVAL");
+  assert.equal(activePlanBaseline.currentActions.length, original.activePlan?.actions.length);
   assert.deepEqual(activePlanBaseline.currentState.activePlan, original.activePlan);
+  for (const status of ["APPROVED", "COMPLETED", "REJECTED"] as const) {
+    const terminalPlanBaseline = await runWhatIfSimulation(
+      original.incident.id,
+      scenarios.ROUTE_BLOCKED,
+      {
+        baselineState: {
+          ...original,
+          activePlan: { ...original.activePlan!, status },
+        },
+        workflowDependencies: successfulWorkflowDependencies(),
+        now: () => new Date(timestamp),
+      },
+    );
+    assert.equal(terminalPlanBaseline.currentPlan?.id, original.activePlan?.id);
+    assert.equal(terminalPlanBaseline.currentPlan?.status, status);
+    assert.equal(
+      terminalPlanBaseline.currentActions.length,
+      original.activePlan?.actions.length,
+    );
+  }
   assert.equal(
     original.routes.find((route) => route.id === "R1")?.status,
     "OPEN",
