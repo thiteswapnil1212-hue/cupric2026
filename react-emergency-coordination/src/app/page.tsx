@@ -126,6 +126,86 @@ function mapRouteClass(
 }
 
 type WhatIfStatus = "IDLE" | "SIMULATING" | "COMPLETE" | "ERROR";
+type PlanActivityKind = "GENERATING" | "REASSESSING";
+
+function PlanningActivity({
+  variant,
+  pending,
+  pendingKind,
+  riskReady,
+  routingReady,
+  planningReady,
+  validation,
+  previousPlanId,
+  currentPlanId,
+  affectedRoute,
+  humanReviewPending,
+}: {
+  variant: "LIVE" | "WHAT_IF";
+  pending: boolean;
+  pendingKind: PlanActivityKind;
+  riskReady: boolean;
+  routingReady: boolean;
+  planningReady: boolean;
+  validation: boolean | null;
+  previousPlanId: string | null;
+  currentPlanId: string | null;
+  affectedRoute: { id: string; statusLabel: string } | null;
+  humanReviewPending: boolean;
+}) {
+  const whatIf = variant === "WHAT_IF";
+  const complete =
+    riskReady && routingReady && planningReady && validation === true;
+  const steps = [
+    { label: "Risk Assessment", detail: "Assessing emergency severity and priorities", done: riskReady },
+    { label: "Resource & Routing", detail: "Evaluating available resources and route feasibility", done: routingReady },
+    { label: "Response Planning", detail: "Building the response plan", done: planningReady },
+    { label: "Validation", detail: validation === true ? "Plan validated against emergency state" : validation === false ? "Plan validation did not pass" : "Validation result unavailable", done: validation === true, failed: validation === false },
+  ];
+
+  return (
+    <section className={`planning-activity${pending ? " planning-activity-pending" : ""}${whatIf ? " planning-activity-what-if" : ""}`} aria-label={whatIf ? "What-If planning activity" : "Response planning activity"}>
+      <div className="planning-activity-heading">
+        <span className="eyebrow">{whatIf ? "WHAT-IF SIMULATION" : "AI COORDINATION"}</span>
+        {pending && <span className="planning-live-indicator"><i aria-hidden="true" />In progress</span>}
+      </div>
+      {pending ? (
+        <div className="planning-pending" aria-live="polite">
+          <span className="planning-pulse" aria-hidden="true"><Activity size={15} /></span>
+          <div>
+            <strong>{whatIf ? "Generating hypothetical response plan" : pendingKind === "REASSESSING" ? "Reassessing after a situation change" : "Generating response plan"}</strong>
+            <span>{pendingKind === "REASSESSING" && previousPlanId ? `Reviewing ${previousPlanId} against the updated emergency state.` : "Agent-by-agent progress is not streamed during this request."}</span>
+          </div>
+        </div>
+      ) : (
+        <>
+          {previousPlanId && currentPlanId && affectedRoute && (
+            <div className="planning-reassessment" aria-label="Plan reassessment">
+              <div><span>ACTIVE PLAN</span><strong>{previousPlanId}</strong></div>
+              <span className="planning-transition" aria-hidden="true">↓</span>
+              <div className="planning-situation"><span>SITUATION CHANGED</span><strong>{affectedRoute.id} · {affectedRoute.statusLabel}</strong><small>Active plan dependency affected</small></div>
+              <span className="planning-transition">↓ REASSESSMENT</span>
+              <div><span>REVISED PLAN</span><strong>{currentPlanId}</strong></div>
+            </div>
+          )}
+          <ol className="planning-steps">
+            {steps.map((step) => (
+              <li className={`planning-step${step.done ? " planning-step-done" : ""}${step.failed ? " planning-step-failed" : ""}`} key={step.label}>
+                <span className="planning-step-icon" aria-hidden="true">{step.done ? <Check size={12} /> : step.failed ? <X size={12} /> : <CircleDot size={12} />}</span>
+                <span className="planning-step-copy"><strong>{step.label}</strong><small>{step.detail}</small></span>
+                <span className="planning-step-status">{step.done ? "Complete" : step.failed ? "Failed" : "Not available"}</span>
+              </li>
+            ))}
+          </ol>
+          <div className={`planning-ready${complete ? " planning-ready-complete" : " planning-ready-incomplete"}`} role="status">
+            <strong>{complete ? whatIf ? "HYPOTHETICAL PLAN READY" : "RESPONSE PLAN READY" : validation === false ? "VALIDATION DID NOT PASS" : "PLAN STATUS UNAVAILABLE"}</strong>
+            <span>{whatIf ? "Simulated only · cannot be approved or executed" : complete && humanReviewPending ? "AI-generated recommendation · awaiting human coordinator review" : complete ? "Workflow result is available for review" : "Review the workflow result before taking action"}</span>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
 
 function scenarioIcon(type: WhatIfScenario["type"]) {
   if (type === "ROUTE_BLOCKED") return <Route size={17} aria-hidden="true" />;
@@ -334,10 +414,11 @@ function ExplainabilityPanel({ model, snapshot }: { model: DashboardViewModel; s
   </section>;
 }
 
-function Dashboard({ model, snapshot, busy, onStart, onApprove, onModify, onReject, onExecute, onBlock, onReset, whatIfSelectedScenario, whatIfStatus, whatIfResult, whatIfHistory, whatIfError, onWhatIfSelect, onWhatIfRun, onWhatIfClose, onWhatIfRetry }: {
+function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onApprove, onModify, onReject, onExecute, onBlock, onReset, whatIfSelectedScenario, whatIfStatus, whatIfResult, whatIfHistory, whatIfError, onWhatIfSelect, onWhatIfRun, onWhatIfClose, onWhatIfRetry }: {
   model: DashboardViewModel;
   snapshot: DemoSnapshot;
   busy: boolean;
+  pendingWorkflowKind: PlanActivityKind | null;
   onStart: () => void;
   onApprove: () => void;
   onModify: (reason?: string) => void;
@@ -387,6 +468,26 @@ function Dashboard({ model, snapshot, busy, onStart, onApprove, onModify, onReje
     id: routeId,
     route: model.routes.find((route) => route.id === routeId),
   })) ?? [];
+  const whatIfActivityVisible = whatIfStatus === "SIMULATING" || whatIfStatus === "COMPLETE";
+  const planningResult = whatIfActivityVisible
+    ? whatIfResult?.workflowResult
+    : snapshot.responsePlanningResult
+      ? {
+          riskAssessment: snapshot.riskAssessment,
+          resourceRoutingAssessment: snapshot.resourceRoutingAssessment,
+          responsePlanningResult: snapshot.responsePlanningResult,
+        }
+      : null;
+  const activityValidation = whatIfActivityVisible
+    ? whatIfResult?.workflowResult.responsePlanningResult.validation.valid ?? null
+    : snapshot.validation?.valid ?? null;
+  const changedRoute = model.reassessment.routeId
+    ? model.routes.find((route) => route.id === model.reassessment.routeId)
+    : undefined;
+  const activityVisible =
+    whatIfActivityVisible ||
+    pendingWorkflowKind !== null ||
+    snapshot.responsePlanningResult !== null;
   const commandStatus =
     snapshot.stage === "REASSESSING"
       ? "REASSESSING"
@@ -455,6 +556,19 @@ function Dashboard({ model, snapshot, busy, onStart, onApprove, onModify, onReje
           </section>
           <section className={`panel plan-panel${approvalAvailable ? " plan-awaiting-approval" : executionAvailable ? " plan-ready-to-execute" : snapshot.stage.startsWith("EXECUTING") ? " plan-executing" : ""}`} id="plans">
             <PanelHeading eyebrow="ACTIVE RESPONSE PLAN" title={plan?.id ?? "NO ACTIVE RESPONSE PLAN"} />
+            {activityVisible && <PlanningActivity
+              variant={whatIfActivityVisible ? "WHAT_IF" : "LIVE"}
+              pending={whatIfStatus === "SIMULATING" || pendingWorkflowKind !== null}
+              pendingKind={pendingWorkflowKind ?? "GENERATING"}
+              riskReady={planningResult?.riskAssessment !== null && planningResult?.riskAssessment !== undefined}
+              routingReady={planningResult?.resourceRoutingAssessment !== null && planningResult?.resourceRoutingAssessment !== undefined}
+              planningReady={planningResult?.responsePlanningResult !== null && planningResult?.responsePlanningResult !== undefined}
+              validation={activityValidation}
+              previousPlanId={whatIfActivityVisible ? null : model.previousPlan?.id ?? (pendingWorkflowKind === "REASSESSING" ? snapshot.currentPlan?.id ?? null : null)}
+              currentPlanId={whatIfActivityVisible ? null : plan?.id ?? null}
+              affectedRoute={!whatIfActivityVisible && changedRoute && changedRoute.status !== "OPEN" ? { id: changedRoute.id, statusLabel: changedRoute.statusLabel } : null}
+              humanReviewPending={!whatIfActivityVisible && approvalAvailable}
+            />}
             {model.previousPlan && <div className="previous-plan-state"><span>PREVIOUS PLAN</span><strong>{model.previousPlan.id}</strong><span>{model.previousPlan.status.replaceAll("_", " ")}</span></div>}
             {snapshot.planHistory.length > 0 && <PlanHistory plans={snapshot.planHistory} />}
             <div className="plan-content" key={plan?.id ?? "empty"}>
@@ -547,14 +661,16 @@ export default function Home() {
  const [controller] = useState(() => createDemoController(autoAiDemoAgents));
  const [snapshot, setSnapshot] = useState<DemoSnapshot>(() => controller.getSnapshot());
  const [busy, setBusy] = useState(false);
+ const [pendingWorkflowKind, setPendingWorkflowKind] = useState<PlanActivityKind | null>(null);
  const [whatIfSelectedScenario, setWhatIfSelectedScenario] = useState<WhatIfScenario | null>(null);
  const [whatIfStatus, setWhatIfStatus] = useState<WhatIfStatus>("IDLE");
  const [whatIfResult, setWhatIfResult] = useState<WhatIfSimulationResult | null>(null);
  const [whatIfHistory, setWhatIfHistory] = useState<WhatIfSimulationResult[]>([]);
  const [whatIfError, setWhatIfError] = useState<string | null>(null);
  const model = useMemo(() => createDashboardViewModel(snapshot), [snapshot]);
- async function run(operation: () => Promise<DemoOperationResult> | DemoOperationResult): Promise<boolean> {
+ async function run(operation: () => Promise<DemoOperationResult> | DemoOperationResult, activityKind: PlanActivityKind | null = null): Promise<boolean> {
    setBusy(true);
+   setPendingWorkflowKind(activityKind);
    try {
      const result = await operation();
      setSnapshot(result.snapshot);
@@ -564,6 +680,7 @@ export default function Home() {
      return false;
    } finally {
      setBusy(false);
+     setPendingWorkflowKind(null);
    }
  }
  async function execute() {
@@ -628,12 +745,13 @@ export default function Home() {
    model={model}
    snapshot={snapshot}
    busy={busy}
-   onStart={() => void run(() => controller.startDemo())}
+   pendingWorkflowKind={pendingWorkflowKind}
+   onStart={() => void run(() => controller.startDemo(), "GENERATING")}
    onApprove={() => void run(() => controller.approveCurrentPlan())}
-   onModify={(reason) => void run(() => controller.modifyCurrentPlan(reason || "Coordinator requested a plan modification."))}
+   onModify={(reason) => void run(() => controller.modifyCurrentPlan(reason || "Coordinator requested a plan modification."), "GENERATING")}
    onReject={(reason) => void run(() => controller.rejectCurrentPlan(reason || "Coordinator rejected the deterministic demo plan."))}
    onExecute={() => void execute()}
-   onBlock={() => void run(() => controller.simulateRouteBlockage())}
+   onBlock={() => void run(() => controller.simulateRouteBlockage(), "REASSESSING")}
    onReset={() => void run(() => controller.resetDemo())}
    whatIfSelectedScenario={whatIfSelectedScenario}
    whatIfStatus={whatIfStatus}
