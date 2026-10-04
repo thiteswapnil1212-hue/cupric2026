@@ -267,6 +267,10 @@ function initialSnapshot(): DemoSnapshot {
   };
 }
 
+export function createInitialDemoSnapshot(): DemoSnapshot {
+  return initialSnapshot();
+}
+
 export class DemoController {
   private snapshot: DemoSnapshot = initialSnapshot();
 
