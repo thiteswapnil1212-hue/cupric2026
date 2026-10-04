@@ -228,6 +228,17 @@ async function main() {
   ) as Record<WhatIfScenario["type"], WhatIfScenario>;
 
   const routeResult = await runScenario(scenarios.ROUTE_BLOCKED);
+  const activePlanBaseline = await runWhatIfSimulation(
+    original.incident.id,
+    scenarios.ROUTE_BLOCKED,
+    {
+      baselineState: original,
+      workflowDependencies: successfulWorkflowDependencies(),
+      now: () => new Date("2026-10-04T00:00:00.000Z"),
+    },
+  );
+  assert.equal(activePlanBaseline.currentPlan?.id, original.activePlan?.id);
+  assert.deepEqual(activePlanBaseline.currentState.activePlan, original.activePlan);
   assert.equal(
     original.routes.find((route) => route.id === "R1")?.status,
     "OPEN",
