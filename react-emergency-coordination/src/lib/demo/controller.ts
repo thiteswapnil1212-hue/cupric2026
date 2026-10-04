@@ -20,14 +20,6 @@ import type { ResponsePlanningResult } from "../agents/response-planning/types";
 import { getDemoState } from "./fixtures";
 import type { DemoError, DemoOperationResult, DemoSnapshot, DemoStage } from "./schema";
 
-const demoTimes = {
-  initialPlan: "2026-10-02T08:41:00.000Z",
-  executed: "2026-10-02T08:44:00.000Z",
-  blockage: "2026-10-02T08:47:00.000Z",
-  revisedPlan: "2026-10-02T08:47:12.000Z",
-  revisedExecuted: "2026-10-02T08:49:00.000Z",
-} as const;
-
 function operationError(stage: DemoStage, code: string, message: string, occurredAt: string): DemoError {
   return { stage, code, message, recovery: "RESET", recoverable: false, occurredAt };
 }
@@ -40,14 +32,21 @@ function agentError(error: unknown): { code: string; message: string } {
 }
 
 function decisionMetadata(plan: ResponsePlan, reason: string): DecisionMetadata {
+  const decidedAt = new Date(
+    Math.max(Date.now(), Date.parse(plan.generatedAt), Date.parse(plan.updatedAt)),
+  ).toISOString();
   return {
     id: `DEMO-DECISION-${plan.id}`,
     incidentId: plan.incidentId,
     coordinatorId: "DEMO-COORDINATOR",
     reason,
-    decidedAt: plan.id === "PLAN-001" ? demoTimes.executed : demoTimes.revisedExecuted,
-    recordedAt: plan.id === "PLAN-001" ? demoTimes.executed : demoTimes.revisedExecuted,
+    decidedAt,
+    recordedAt: decidedAt,
   };
+}
+
+function latestTimestamp(...values: string[]): string {
+  return new Date(Math.max(...values.map((value) => Date.parse(value)))).toISOString();
 }
 
 function changeRecord(
@@ -88,8 +87,8 @@ function createPlanResult(
     summary,
     rationale,
     source: "DETERMINISTIC_FALLBACK",
-    generatedAt: planId === "PLAN-001" ? demoTimes.initialPlan : demoTimes.revisedPlan,
-    updatedAt: planId === "PLAN-001" ? demoTimes.initialPlan : demoTimes.revisedPlan,
+    generatedAt: state.updatedAt,
+    updatedAt: state.updatedAt,
     actions: actions.map((action) => ({ actionId: action.id, sequence: action.sequence })),
     alternatives: [],
     dependencies: {
@@ -293,7 +292,11 @@ export class DemoController {
   async startDemo(): Promise<DemoOperationResult> {
     if (this.snapshot.stage !== "IDLE") return this.fail(this.snapshot.stage, "INVALID_TRANSITION", "Reset the demo before starting a new run.");
     const fixture = getDemoState("initial");
-    const initialState: EmergencyState = { ...fixture.state, activePlan: null };
+    const initialState: EmergencyState = {
+      ...fixture.state,
+      activePlan: null,
+      updatedAt: latestTimestamp(fixture.state.updatedAt, new Date().toISOString()),
+    };
     this.snapshot = { ...this.snapshot, stage: "EMERGENCY_INITIALIZED", state: initialState, agentRuns: fixture.agentRuns, stateChanges: [changeRecord("DEMO-001", "INCIDENT", initialState.incident.id, "CREATED", "Emergency detected", null, "ACTIVE", initialState.incident.reportedAt)], progress: { current: 1, total: 9, label: "Emergency initialized" }, error: null };
     let riskAssessment: RiskAssessment;
     let resourceRoutingAssessment: ResourceRoutingAssessment;
@@ -317,7 +320,7 @@ export class DemoController {
     }
     const submitted = submitPlanForApproval(generated.plan);
     if (!submitted.success) return this.fail("PLAN_GENERATED", submitted.error.code, submitted.error.message);
-    this.snapshot = { ...this.snapshot, stage: "AWAITING_APPROVAL", currentPlan: submitted.plan, planHistory: [submitted.plan], state: { ...includePlanActions(initialState, generated.actions), activePlan: submitted.plan }, riskAssessment, resourceRoutingAssessment, responsePlanningResult: generated, validation: generated.validation, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-002", "PLAN", submitted.plan.id, "CREATED", "Response Plan-001 generated", null, "PENDING_APPROVAL", demoTimes.initialPlan)], progress: { current: 2, total: 9, label: "Human authorization required" } };
+    this.snapshot = { ...this.snapshot, stage: "AWAITING_APPROVAL", currentPlan: submitted.plan, planHistory: [submitted.plan], state: { ...includePlanActions(initialState, generated.actions), activePlan: submitted.plan, updatedAt: latestTimestamp(initialState.updatedAt, submitted.plan.updatedAt) }, riskAssessment, resourceRoutingAssessment, responsePlanningResult: generated, validation: generated.validation, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-002", "PLAN", submitted.plan.id, "CREATED", "Response Plan-001 generated", null, "PENDING_APPROVAL", submitted.plan.generatedAt)], progress: { current: 2, total: 9, label: "Human authorization required" } };
     return { success: true, snapshot: this.snapshot };
   }
 
@@ -329,7 +332,11 @@ export class DemoController {
     this.snapshot = {
       ...this.snapshot,
       stage: "AWAITING_EXECUTION",
-      state: { ...this.snapshot.state, activePlan: approved.plan },
+      state: {
+        ...this.snapshot.state,
+        activePlan: approved.plan,
+        updatedAt: approved.plan.updatedAt,
+      },
       currentPlan: approved.plan,
       planHistory: this.updatePlanHistory(approved.plan),
       humanDecision: approved.decision ?? null,
@@ -375,7 +382,11 @@ export class DemoController {
     ) {
       return this.fail(this.snapshot.stage, "INVALID_TRANSITION", "Only an approved plan in the executing state can be completed.");
     }
-    const executed: SimulationResult = this.simulationExecutor(this.snapshot.state, plan);
+    const executionState: EmergencyState = {
+      ...this.snapshot.state,
+      updatedAt: new Date().toISOString(),
+    };
+    const executed: SimulationResult = this.simulationExecutor(executionState, plan);
     if (!executed.success) return this.fail(this.snapshot.stage, executed.error.code, executed.error.message);
     const executionChanges = executed.stateChanges;
     this.snapshot = {
@@ -384,7 +395,7 @@ export class DemoController {
       state: executed.state,
       currentPlan: executed.plan,
       planHistory: this.updatePlanHistory(executed.plan),
-      stateChanges: [...this.snapshot.stateChanges, ...executionChanges, changeRecord(`DEMO-${plan.id}-APPROVED`, "PLAN", plan.id, "STATUS_CHANGED", `${plan.id} approved and executed`, "APPROVED", "COMPLETED", plan.id === "PLAN-001" ? demoTimes.executed : demoTimes.revisedExecuted)],
+      stateChanges: [...this.snapshot.stateChanges, ...executionChanges, changeRecord(`DEMO-${plan.id}-COMPLETED`, "PLAN", plan.id, "STATUS_CHANGED", `${plan.id} execution completed`, "APPROVED", "COMPLETED", executed.plan.updatedAt)],
       progress: { current: plan.id === "PLAN-001" ? 4 : 9, total: 9, label: plan.id === "PLAN-001" ? "Plan-001 complete · situation monitoring" : "Demo completed" },
       error: null,
     };
@@ -397,7 +408,7 @@ export class DemoController {
     const normalizedReason = reason.trim() || "Coordinator rejected the deterministic demo plan.";
     const rejected = rejectPlan(plan, { ...decisionMetadata(plan, normalizedReason), reason: normalizedReason, currentState: this.snapshot.state });
     if (!rejected.success) return this.fail(this.snapshot.stage, rejected.error.code, rejected.error.message);
-    this.snapshot = { ...this.snapshot, stage: "FAILED", currentPlan: rejected.plan, planHistory: this.updatePlanHistory(rejected.plan), state: { ...this.snapshot.state, activePlan: rejected.plan }, humanDecision: rejected.decision ?? null, stateChanges: [...this.snapshot.stateChanges, changeRecord(`DEMO-${plan.id}-HUMAN-REJECTED`, "PLAN", plan.id, "STATUS_CHANGED", `${plan.id} rejected by the coordinator: ${normalizedReason}`, "PENDING_APPROVAL", "REJECTED", rejected.plan.updatedAt)], progress: { ...this.snapshot.progress, label: "Plan rejected · reset required" }, error: null };
+    this.snapshot = { ...this.snapshot, stage: "FAILED", currentPlan: rejected.plan, planHistory: this.updatePlanHistory(rejected.plan), state: { ...this.snapshot.state, activePlan: rejected.plan, updatedAt: rejected.plan.updatedAt }, humanDecision: rejected.decision ?? null, stateChanges: [...this.snapshot.stateChanges, changeRecord(`DEMO-${plan.id}-HUMAN-REJECTED`, "PLAN", plan.id, "STATUS_CHANGED", `${plan.id} rejected by the coordinator: ${normalizedReason}`, "PENDING_APPROVAL", "REJECTED", rejected.plan.updatedAt)], progress: { ...this.snapshot.progress, label: "Plan rejected · reset required" }, error: null };
     return { success: true, snapshot: this.snapshot };
   }
 
@@ -407,16 +418,17 @@ export class DemoController {
     const previousState = this.snapshot.state;
     const primaryRoute = previousState.routes.find((route) => route.id === "R1");
     if (primaryRoute === undefined) return this.fail("SITUATION_CHANGED", "ROUTE_NOT_FOUND", "Primary route R1 is not present in the current emergency state.");
+    const blockageAt = latestTimestamp(previousState.updatedAt, new Date().toISOString());
     const transitionedRoute = transitionRouteStatus(primaryRoute, "BLOCKED", "Flooding reported on primary access route.");
     const blockedRoute = transitionedRoute.route;
     if (!transitionedRoute.valid || blockedRoute === null) return this.fail("SITUATION_CHANGED", transitionedRoute.errors[0]?.code ?? "ROUTE_TRANSITION_FAILED", transitionedRoute.errors[0]?.message ?? "Route R1 could not be blocked.");
     const currentState: EmergencyState = {
       ...previousState,
-      routes: previousState.routes.map((route) => route.id === "R1" ? { ...blockedRoute, updatedAt: demoTimes.blockage } : route),
+      routes: previousState.routes.map((route) => route.id === "R1" ? { ...blockedRoute, updatedAt: blockageAt } : route),
       stateVersion: previousState.stateVersion + 1,
-      updatedAt: demoTimes.blockage,
+      updatedAt: blockageAt,
     };
-    this.snapshot = { ...this.snapshot, stage: "SITUATION_CHANGED", state: currentState, previousPlan: activePlan, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-ROUTE-001", "ROUTE", "R1", "STATUS_CHANGED", "Route R1 blocked", "OPEN", "BLOCKED", demoTimes.blockage)], progress: { current: 5, total: 9, label: "Situation changed · detecting impact" } };
+    this.snapshot = { ...this.snapshot, stage: "SITUATION_CHANGED", state: currentState, previousPlan: activePlan, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-ROUTE-001", "ROUTE", "R1", "STATUS_CHANGED", "Route R1 blocked", "OPEN", "BLOCKED", blockageAt)], progress: { current: 5, total: 9, label: "Situation changed · detecting impact" } };
     const detection = detectEmergencyStateChanges({ previousState, currentState, activePlan });
     if (detection.success === false) return this.fail("CHANGE_DETECTED", "CHANGE_DETECTION_FAILED", detection.error.message);
     this.snapshot = {
@@ -432,7 +444,7 @@ export class DemoController {
           `Change detected: ${detection.classification}`,
           null,
           detection.classification,
-          demoTimes.blockage,
+          blockageAt,
         ),
       ],
     };
@@ -450,7 +462,7 @@ export class DemoController {
           `Reassessment started for affected plan ${activePlan.id}`,
           "ACTIVE",
           "REASSESSING",
-          demoTimes.blockage,
+          blockageAt,
         ),
       ],
       progress: { current: 6, total: 9, label: "Plan dependency affected · reassessing" },
@@ -477,7 +489,7 @@ export class DemoController {
     }
     const revisedPlan = submitPlanForApproval(revised.plan);
     if (!revisedPlan.success) return this.fail("REASSESSING", revisedPlan.error.code, revisedPlan.error.message);
-    this.snapshot = { ...this.snapshot, stage: "AWAITING_REVISED_APPROVAL", state: { ...includePlanActions(currentState, revised.actions), activePlan: revisedPlan.plan }, currentPlan: revisedPlan.plan, previousPlan: activePlan, planHistory: [...this.snapshot.planHistory, revisedPlan.plan], riskAssessment, resourceRoutingAssessment, responsePlanningResult: revised, validation: revised.validation, humanDecision: null, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-PLAN-002", "PLAN", revisedPlan.plan.id, "CREATED", "Response Plan-002 generated", null, "PENDING_APPROVAL", revisedPlan.plan.generatedAt)], progress: { current: 7, total: 9, label: "Revised plan ready · human authorization required" }, error: null };
+    this.snapshot = { ...this.snapshot, stage: "AWAITING_REVISED_APPROVAL", state: { ...includePlanActions(currentState, revised.actions), activePlan: revisedPlan.plan, updatedAt: latestTimestamp(currentState.updatedAt, revisedPlan.plan.updatedAt) }, currentPlan: revisedPlan.plan, previousPlan: activePlan, planHistory: [...this.snapshot.planHistory, revisedPlan.plan], riskAssessment, resourceRoutingAssessment, responsePlanningResult: revised, validation: revised.validation, humanDecision: null, stateChanges: [...this.snapshot.stateChanges, changeRecord("DEMO-PLAN-002", "PLAN", revisedPlan.plan.id, "CREATED", "Response Plan-002 generated", null, "PENDING_APPROVAL", revisedPlan.plan.generatedAt)], progress: { current: 7, total: 9, label: "Revised plan ready · human authorization required" }, error: null };
     return { success: true, snapshot: this.snapshot };
   }
 
