@@ -57,7 +57,6 @@ export type DashboardAgent = {
   timeLabel: string;
   tone: StatusTone;
   purpose: string;
-  durationLabel: string;
   resultSummary: string;
   affectedPlan: boolean;
 };
@@ -97,7 +96,7 @@ export type DashboardViewModel = {
 
 export function responsePlanSourceLabel(source: ResponsePlan["source"]): string {
   if (source === "GEMINI") return "AI RECOMMENDATION";
-  if (source === "DETERMINISTIC_FALLBACK") return "DETERMINISTIC FALLBACK";
+  if (source === "DETERMINISTIC_FALLBACK") return "BUILT-IN EMERGENCY RULES";
   return "SOURCE UNAVAILABLE";
 }
 
@@ -116,6 +115,53 @@ function resourceTone(status: DashboardResource["status"]): StatusTone {
   if (status === "DISPATCHED" || status === "ASSIGNED") return "blue";
   if (status === "BUSY") return "amber";
   return "red";
+}
+
+function resourceAssignment(
+  state: EmergencyState,
+  resource: EmergencyState["resources"][number],
+  plan: ResponsePlan | null,
+): { assignment: string; statusLabel: string; tone: StatusTone } {
+  if (resource.currentAssignmentId === null) {
+    return {
+      assignment: "Unassigned",
+      statusLabel: titleCase(resource.status),
+      tone: resourceTone(resource.status),
+    };
+  }
+
+  const action = state.planActions.find(
+    (candidate) => candidate.id === resource.currentAssignmentId,
+  );
+  if (action === undefined) {
+    return {
+      assignment: "Assignment recorded",
+      statusLabel: titleCase(resource.status),
+      tone: resourceTone(resource.status),
+    };
+  }
+
+  const actionIsCurrent = plan?.actions.some(
+    (reference) => reference.actionId === action.id,
+  ) ?? false;
+  const assignmentIsSuperseded =
+    plan !== null && action.planId !== plan.id && !actionIsCurrent;
+
+  if (assignmentIsSuperseded) {
+    return {
+      assignment: `Previous plan: ${action.planId}`,
+      statusLabel: "Superseded",
+      tone: "gray",
+    };
+  }
+
+  return {
+    assignment: actionIsCurrent
+      ? `Current plan: ${plan?.id ?? action.planId}`
+      : `${action.planId} assignment`,
+    statusLabel: titleCase(resource.status),
+    tone: resourceTone(resource.status),
+  };
 }
 
 function routeTone(status: RouteStatus): StatusTone {
@@ -171,7 +217,10 @@ function toTimeline(
       timeLabel: timeLabel(change.change.occurredAt),
       title: resources.reduce(
         (description, resource) => description.replaceAll(resource.id, resource.name),
-        change.change.description,
+        change.change.description ===
+        "Change detected: PLAN_AFFECTED_REASSESSMENT_REQUIRED"
+          ? "Change detected: active plan affected — reassessment started"
+          : change.change.description,
       ),
       detail: `${change.change.entityType} ${resourceNames.get(change.change.entityId) ?? change.change.entityId}`,
       tone: change.change.changeType === "STATUS_CHANGED" ? "red" : change.change.entityType === "PLAN" ? "green" : "gray",
@@ -187,6 +236,9 @@ export function createDashboardViewModel(
   const plan = "currentPlan" in snapshot
     ? snapshot.currentPlan
     : state.activePlan;
+  const previousPlan = "previousPlan" in snapshot
+    ? snapshot.previousPlan
+    : null;
   const approvalAvailable = "stage" in snapshot
     ? (snapshot.stage === "AWAITING_APPROVAL" || snapshot.stage === "AWAITING_REVISED_APPROVAL") && plan?.status === "PENDING_APPROVAL"
     : plan?.status === "PENDING_APPROVAL";
@@ -195,17 +247,24 @@ export function createDashboardViewModel(
     incident: state.incident,
     stateVersion: state.stateVersion,
     updatedAt: state.updatedAt,
-    resources: state.resources.map((resource) => ({
-      id: resource.id,
-      name: resource.name,
-      type: resource.type,
-      typeLabel: typeLabel(resource.type),
-      status: resource.status,
-      statusLabel: titleCase(resource.status),
-      assignment: resource.currentAssignmentId ?? "Unassigned",
-      location: resource.location.latitude.toFixed(3) + ", " + resource.location.longitude.toFixed(3),
-      tone: resourceTone(resource.status),
-    })),
+    resources: state.resources.map((resource) => {
+      const assignment = resourceAssignment(state, resource, plan);
+      const isSuperseded =
+        previousPlan !== null && assignment.statusLabel === "Superseded";
+      return {
+        id: resource.id,
+        name: resource.name,
+        type: resource.type,
+        typeLabel: typeLabel(resource.type),
+        status: resource.status,
+        statusLabel: isSuperseded
+          ? assignment.statusLabel
+          : titleCase(resource.status),
+        assignment: assignment.assignment,
+        location: `${resource.location.latitude.toFixed(3)}, ${resource.location.longitude.toFixed(3)}`,
+        tone: isSuperseded ? "gray" : assignment.tone,
+      };
+    }),
     facilities: state.facilities.map((facility) => ({
       id: facility.id,
       name: facility.name,
@@ -256,7 +315,6 @@ export function createDashboardViewModel(
         timeLabel: idle ? "Not started" : hasWorkflowResult ? "Result available" : "Not available",
         tone: idle ? "gray" : status === "COMPLETED" ? "green" : status === "RUNNING" ? "amber" : status === "PENDING" ? "gray" : "red",
         purpose: agentPurposes[run.agentType],
-        durationLabel: idle ? "—" : "Duration unavailable",
         resultSummary,
         affectedPlan: !idle && hasWorkflowResult,
       };
