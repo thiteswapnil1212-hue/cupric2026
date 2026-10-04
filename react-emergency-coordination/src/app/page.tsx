@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Activity, AlertTriangle, Bell, Check, CircleDot, Clock3, Crosshair,
   Hospital, MapPin, Route, Users, X,
@@ -31,6 +31,14 @@ function StatusDot({ tone = "green" }: { tone?: StatusTone }) {
 
 function PanelHeading({ eyebrow, title }: { eyebrow?: string; title: string }) {
   return <div className="panel-heading"><div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2>{title}</h2></div></div>;
+}
+
+function planStatusTone(status: NonNullable<DashboardViewModel["activePlan"]>["status"]): StatusTone {
+  if (status === "PENDING_APPROVAL") return "amber";
+  if (status === "REJECTED" || status === "INVALID") return "red";
+  if (status === "COMPLETED") return "blue";
+  if (status === "APPROVED" || status === "MODIFIED") return "green";
+  return "gray";
 }
 
 function formatTime(value: string): string {
@@ -88,7 +96,7 @@ function agentRows(agents: DashboardAgent[]) {
 
 function timelineRows(items: DashboardTimelineItem[], idle: boolean) {
   if (items.length === 0 && idle) return <p className="timeline-empty">No situation events yet</p>;
-  return [...items].reverse().map((item) => <div className={`timeline-item timeline-tone-${item.tone}`} key={item.id}><time>{item.timeLabel}</time><span className={`timeline-marker marker-${item.tone}`} /><div><strong>{item.title}</strong><span>{item.detail}</span></div></div>);
+  return items.map((item) => <div className={`timeline-item timeline-tone-${item.tone}`} key={item.id}><time>{item.timeLabel}</time><span className={`timeline-marker marker-${item.tone}`} /><div><strong>{item.title}</strong><span>{item.detail}</span></div></div>);
 }
 
 function PlanHistory({ plans }: { plans: DemoSnapshot["planHistory"] }) {
@@ -97,7 +105,7 @@ function PlanHistory({ plans }: { plans: DemoSnapshot["planHistory"] }) {
     <summary>Plan history ({plans.length})</summary>
     <ol>{[...plans].reverse().map((historyPlan) => <li key={`${historyPlan.id}-${historyPlan.updatedAt}`}>
       <strong>{historyPlan.id}</strong>
-      <span className={`status-badge badge-${historyPlan.status === "COMPLETED" || historyPlan.status === "APPROVED" ? "green" : historyPlan.status === "PENDING_APPROVAL" ? "amber" : historyPlan.status === "REJECTED" ? "red" : "gray"}`}>{historyPlan.status.replaceAll("_", " ")}</span>
+      <span className={`status-badge badge-${planStatusTone(historyPlan.status)}`}>{historyPlan.status.replaceAll("_", " ")}</span>
       <time>{formatTime(historyPlan.updatedAt)}</time>
     </li>)}</ol>
   </details>;
@@ -334,8 +342,8 @@ function WhatIfPanel({
           <div className="what-if-comparison">
             <article className="what-if-plan-card what-if-real">
               <span className="what-if-card-label">REAL / ACTIVE RESPONSE</span>
-              <h4>{result.currentPlan?.id ?? "NO ACTIVE PLAN"}</h4>
-              <p>{result.currentPlan?.status.replaceAll("_", " ") ?? "No persisted active plan"}</p>
+              <h4>{result.currentPlan ? `Current active plan: ${result.currentPlan.id}` : "No active plan"}</h4>
+              <p>{result.currentPlan?.status.replaceAll("_", " ") ?? "Real emergency baseline"}</p>
               <dl>
                 <div><dt>Route</dt><dd>{dependencyNames(result.currentState, result.currentActions, "routeIds")}</dd></div>
                 <div><dt>Facility</dt><dd>{dependencyNames(result.currentState, result.currentActions, "facilityIds")}</dd></div>
@@ -414,14 +422,13 @@ function ExplainabilityPanel({ model, snapshot }: { model: DashboardViewModel; s
   </section>;
 }
 
-function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onApprove, onModify, onReject, onExecute, onBlock, onReset, whatIfSelectedScenario, whatIfStatus, whatIfResult, whatIfHistory, whatIfError, onWhatIfSelect, onWhatIfRun, onWhatIfClose, onWhatIfRetry }: {
+function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onApprove, onReject, onExecute, onBlock, onReset, whatIfSelectedScenario, whatIfStatus, whatIfResult, whatIfHistory, whatIfError, onWhatIfSelect, onWhatIfRun, onWhatIfClose, onWhatIfRetry }: {
   model: DashboardViewModel;
   snapshot: DemoSnapshot;
   busy: boolean;
   pendingWorkflowKind: PlanActivityKind | null;
   onStart: () => void;
   onApprove: () => void;
-  onModify: (reason?: string) => void;
   onReject: (reason: string) => void;
   onExecute: () => void;
   onBlock: () => void;
@@ -438,7 +445,7 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
 }) {
   const [rejectReason, setRejectReason] = useState("");
   const [dismissedAlertRoute, setDismissedAlertRoute] = useState<string | null>(null);
-  const plan = model.activePlan;
+  const plan = snapshot.currentPlan;
   const whatIfPlan =
     whatIfStatus === "COMPLETE"
       ? whatIfResult?.workflowResult.responsePlanningResult.plan ?? null
@@ -524,7 +531,7 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
     <div className="main-column">
       <header className="topbar"><div className="incident-context"><span className="context-label">CURRENT INCIDENT</span><strong>{model.incident.title}</strong><span className="incident-id">{model.incident.id}</span></div><div className="topbar-meta"><div className="topbar-state" data-tone={commandStatusTone} role="status" aria-live="polite"><StatusDot tone={commandStatusTone} /><span>System status</span><strong key={commandStatus}>{commandStatus}</strong></div><div className="topbar-divider" /><div className="topbar-updated">Last updated <strong>{formatTime(model.updatedAt)}</strong></div><div className="user-control"><span className="avatar" aria-hidden="true">JM</span><span className="user-name">Jordan Miller</span></div></div></header>
       <main className="dashboard" id="overview">
-        <div className="page-header"><div><p className="eyebrow">OPERATIONS OVERVIEW</p><h1>Emergency coordination</h1></div><div className="header-actions"><span className="live-indicator" role="status" aria-live="polite"><StatusDot />{snapshot.progress.label}</span>        <div className="demo-switch">{snapshot.stage === "IDLE" ? <button className="demo-active" onClick={onStart} disabled={busy}>Start demo</button> : <button onClick={() => { setDismissedAlertRoute(null); onReset(); }} disabled={busy}>Reset demo</button>}{snapshot.stage === "COMPLETED" && snapshot.currentPlan?.id === "PLAN-001" && <button onClick={onBlock} disabled={busy}>Simulate R1 blockage</button>}</div></div></div>
+        <div className="page-header"><div><p className="eyebrow">OPERATIONS OVERVIEW</p><h1>Emergency coordination</h1></div><div className="header-actions"><span className="live-indicator" role="status" aria-live="polite"><StatusDot />{snapshot.progress.label}</span>        <div className="demo-switch">{snapshot.stage === "IDLE" ? <button className="demo-active" onClick={onStart} disabled={busy}>Start demo</button> : <button onClick={onReset} disabled={busy}>Reset demo</button>}{snapshot.stage === "COMPLETED" && snapshot.currentPlan?.id === "PLAN-001" && <button onClick={onBlock} disabled={busy}>Simulate R1 blockage</button>}</div></div></div>
         <section className="summary-strip" aria-label="Emergency summary"><div className="summary-cell summary-incident"><span className="summary-label">Incident</span><strong>{model.incident.title}</strong><small>{model.incident.location.address}</small></div><div className="summary-cell"><span className="summary-label">Status</span><strong className="value-critical"><StatusDot tone="red" />{model.incident.status} emergency</strong></div><div className="summary-cell"><span className="summary-label">Severity</span><strong className="value-critical">{model.incident.severity}</strong><small>Immediate response</small></div><div className="summary-cell"><span className="summary-label">Affected</span><strong>{model.incident.affectedPopulation} people</strong><small>Current incident estimate</small></div><div className="summary-cell"><span className="summary-label">State version</span><strong>v{model.stateVersion}</strong><small>Updated {formatTime(model.updatedAt)}</small></div></section>
         {snapshot.error && <div className="operational-failure" role="alert"><strong>{snapshot.error.code}</strong><span>{snapshot.error.message}</span><small>Stage: {snapshot.error.stage} · Reset required</small></div>}
         <WhatIfPanel
@@ -590,8 +597,8 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
                       </span>
                     ))}
                   </span>
-                  <span className={`plan-status status-badge badge-${plan.status === "PENDING_APPROVAL" ? "amber" : plan.status === "APPROVED" ? "green" : plan.status === "COMPLETED" ? "blue" : plan.status === "REJECTED" ? "red" : "gray"}`}>
-                    <StatusDot tone={plan.status === "PENDING_APPROVAL" ? "amber" : plan.status === "REJECTED" ? "red" : "green"} />
+                  <span className={`plan-status status-badge badge-${planStatusTone(plan.status)}`}>
+                    <StatusDot tone={planStatusTone(plan.status)} />
                     {plan.status.replaceAll("_", " ")}
                   </span>
                 </div>
@@ -623,12 +630,11 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
                   <div>
                     <span className="eyebrow">{approvalAvailable ? "HUMAN AUTHORIZATION" : model.humanDecision?.decision === "APPROVE" ? "HUMAN APPROVED" : "WORKFLOW STATUS"}</span>
                     <p>{snapshot.progress.label}</p>
-                    {approvalAvailable && <input className="decision-reason" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Reason for rejection or modification (optional)" aria-label="Reason for rejection or modification" />}
+                    {approvalAvailable && <input className="decision-reason" value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Reason for rejection (optional)" aria-label="Reason for rejection" />}
                   </div>
                   <div className="decision-buttons">
                     {approvalAvailable && <>
                       <button className="button-approve" disabled={busy} onClick={onApprove}>{busy ? "Approving…" : <><Check size={14} />Approve plan</>}</button>
-                      <button className="button-modify" disabled={busy} onClick={() => onModify(rejectReason || "Coordinator requested a plan modification.")}>Modify</button>
                       <button className="button-reject" disabled={busy} onClick={() => onReject(rejectReason || "Coordinator rejected the deterministic demo plan.")}>Reject</button>
                     </>}
                     {(executionAvailable || snapshot.stage === "EXECUTING" || snapshot.stage === "EXECUTING_REVISED_PLAN") && <button className="button-approve" disabled={busy || !executionAvailable} onClick={onExecute}>{busy || snapshot.stage.startsWith("EXECUTING") ? "Executing…" : "Execute plan"}</button>}
@@ -649,7 +655,7 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
         )}</div></section>
         </div>
         <div className="secondary-grid"><section className="panel table-panel" id="resources"><PanelHeading eyebrow="FIELD OPERATIONS" title="Resource status" /><div className="data-table"><div className="table-row table-head"><span>Resource</span><span>Type</span><span>Status</span><span>Assignment</span><span>Location</span></div>{resourceRows(model.resources)}</div></section><section className="panel facilities-panel" id="facilities"><PanelHeading eyebrow="CARE CAPACITY" title="Facilities" /><div className="facility-list">{facilityRows(model.facilities)}</div></section></div>
-        <div className="bottom-grid"><section className="panel activity-panel" id="activity"><PanelHeading eyebrow="PROCESSING ACTIVITY" title="Agent activity" /><div className="agent-list">{agentRows(model.agents)}</div><div className="ai-note"><CircleDot size={13} />AI analyzes and recommends. Human coordinators authorize execution.</div></section><section className="panel timeline-panel" id="timeline"><PanelHeading eyebrow="AUDIT TRAIL" title="Situation timeline" /><div className="timeline-list" role="log" aria-label="Situation timeline" aria-live="polite" aria-relevant="additions text">{timelineRows(model.timeline, snapshot.stage === "IDLE")}</div></section></div>
+        <div className="bottom-grid"><section className="panel activity-panel" id="activity"><PanelHeading eyebrow="PROCESSING ACTIVITY" title="Agent activity" />{busy && pendingWorkflowKind ? <div className="agent-pending" role="status" aria-live="polite"><Activity size={15} aria-hidden="true" />{pendingWorkflowKind === "REASSESSING" ? "Reassessing the response after the reported situation change." : "Analyzing emergency state, evaluating resources and routes, and generating a response plan."}</div> : <div className="agent-list">{agentRows(model.agents)}</div>}<div className="ai-note"><CircleDot size={13} />AI analyzes and recommends. Human coordinators authorize execution.</div></section><section className="panel timeline-panel" id="timeline"><PanelHeading eyebrow="AUDIT TRAIL" title="Situation timeline" /><div className="timeline-list" role="log" aria-label="Situation timeline" aria-live="polite" aria-relevant="additions text">{timelineRows(model.timeline, snapshot.stage === "IDLE")}</div></section></div>
         <ExplainabilityPanel model={model} snapshot={snapshot} />
       </main>
       <footer className="app-footer"><span>REACT Emergency Coordination · Deterministic demo environment</span><span>State version {model.stateVersion} <span className="footer-divider">|</span> {model.incident.id}</span></footer>
@@ -667,6 +673,8 @@ export default function Home() {
  const [whatIfResult, setWhatIfResult] = useState<WhatIfSimulationResult | null>(null);
  const [whatIfHistory, setWhatIfHistory] = useState<WhatIfSimulationResult[]>([]);
  const [whatIfError, setWhatIfError] = useState<string | null>(null);
+ const whatIfRequestRef = useRef(0);
+ const [dashboardEpoch, setDashboardEpoch] = useState(0);
  const model = useMemo(() => createDashboardViewModel(snapshot), [snapshot]);
  async function run(operation: () => Promise<DemoOperationResult> | DemoOperationResult, activityKind: PlanActivityKind | null = null): Promise<boolean> {
    setBusy(true);
@@ -695,8 +703,28 @@ export default function Home() {
    setWhatIfResult(null);
    setWhatIfError(null);
  }
+ function clearDemoUiState() {
+   whatIfRequestRef.current += 1;
+   setWhatIfSelectedScenario(null);
+   setWhatIfStatus("IDLE");
+   setWhatIfResult(null);
+   setWhatIfHistory([]);
+   setWhatIfError(null);
+   setPendingWorkflowKind(null);
+   setDashboardEpoch((epoch) => epoch + 1);
+ }
+ function resetDemo() {
+   clearDemoUiState();
+   setSnapshot(controller.resetDemo().snapshot);
+   setBusy(false);
+ }
+ function startDemo() {
+   clearDemoUiState();
+   void run(() => controller.startDemo(), "GENERATING");
+ }
  async function runWhatIf() {
    if (whatIfSelectedScenario === null || whatIfStatus === "SIMULATING") return;
+   const requestId = ++whatIfRequestRef.current;
    setWhatIfStatus("SIMULATING");
    setWhatIfResult(null);
    setWhatIfError(null);
@@ -707,9 +735,11 @@ export default function Home() {
        body: JSON.stringify({
          incidentId: model.incident.id,
          scenario: whatIfSelectedScenario,
+         baselineState: snapshot.state,
        }),
      });
      const body = await response.json() as unknown;
+     if (requestId !== whatIfRequestRef.current) return;
      if (!response.ok) {
        const message =
          typeof body === "object" &&
@@ -728,6 +758,7 @@ export default function Home() {
      setWhatIfHistory((current) => [parsed.data, ...current].slice(0, 3));
      setWhatIfStatus("COMPLETE");
    } catch (error) {
+     if (requestId !== whatIfRequestRef.current) return;
      setWhatIfError(
        error instanceof Error
          ? error.message
@@ -742,17 +773,17 @@ export default function Home() {
    setWhatIfError(null);
  }
  return <Dashboard
+   key={dashboardEpoch}
    model={model}
    snapshot={snapshot}
    busy={busy}
    pendingWorkflowKind={pendingWorkflowKind}
-   onStart={() => void run(() => controller.startDemo(), "GENERATING")}
+   onStart={startDemo}
    onApprove={() => void run(() => controller.approveCurrentPlan())}
-   onModify={(reason) => void run(() => controller.modifyCurrentPlan(reason || "Coordinator requested a plan modification."), "GENERATING")}
    onReject={(reason) => void run(() => controller.rejectCurrentPlan(reason || "Coordinator rejected the deterministic demo plan."))}
    onExecute={() => void execute()}
    onBlock={() => void run(() => controller.simulateRouteBlockage(), "REASSESSING")}
-   onReset={() => void run(() => controller.resetDemo())}
+   onReset={resetDemo}
    whatIfSelectedScenario={whatIfSelectedScenario}
    whatIfStatus={whatIfStatus}
    whatIfResult={whatIfResult}
