@@ -22,6 +22,7 @@ export const GeminiFailureCategorySchema = z.enum([
   "TIMEOUT",
   "NETWORK",
   "RATE_LIMITED",
+  "PROJECT_QUOTA_EXHAUSTED",
   "PROVIDER_UNAVAILABLE",
   "PERMANENT",
 ]);
@@ -40,12 +41,23 @@ export type GeminiFinalProviderFailure = z.infer<
   typeof GeminiFinalProviderFailureSchema
 >;
 
+export const GeminiModelFailureSchema = z
+  .object({
+    model: GeminiModelSchema,
+    code: GeminiErrorCodeSchema,
+    category: GeminiFailureCategorySchema,
+    httpStatus: z.number().int().optional(),
+  })
+  .strict();
+export type GeminiModelFailure = z.infer<typeof GeminiModelFailureSchema>;
+
 export const GeminiGenerationMetadataSchema = z
   .object({
     selectedModel: GeminiModelSchema.nullable(),
     attemptedModels: z.array(GeminiModelSchema),
     fallbackUsed: z.boolean(),
     finalProviderFailure: GeminiFinalProviderFailureSchema.nullable(),
+    modelFailures: z.array(GeminiModelFailureSchema).optional(),
   })
   .strict();
 export type GeminiGenerationMetadata = z.infer<
@@ -77,6 +89,13 @@ export class GeminiError extends Error {
               metadata.finalProviderFailure === null
                 ? null
                 : { ...metadata.finalProviderFailure },
+            ...(metadata.modelFailures === undefined
+              ? {}
+              : {
+                  modelFailures: metadata.modelFailures.map((failure) => ({
+                    ...failure,
+                  })),
+                }),
           };
   }
 }
@@ -173,6 +192,13 @@ export function classifyGeminiProviderFailure(error: unknown): {
   transient: boolean;
 } {
   const httpStatus = getHttpStatus(error);
+  if (httpStatus === 429 && indicatesProjectWideQuota(error)) {
+    return {
+      category: "PROJECT_QUOTA_EXHAUSTED",
+      transient: false,
+      httpStatus,
+    };
+  }
   if (isTimeout(error) || httpStatus === 408) {
     return { category: "TIMEOUT", transient: true, httpStatus };
   }
@@ -193,6 +219,68 @@ export function classifyGeminiProviderFailure(error: unknown): {
     return { category: "NETWORK", transient: true };
   }
   return { category: "PERMANENT", transient: false };
+}
+
+function indicatesProjectWideQuota(error: unknown): boolean {
+  const parts: string[] = [];
+  const quotaIds: string[] = [];
+  let hasModelDimension = false;
+  const visited = new Set<object>();
+  const visit = (value: unknown, depth: number, parentKey = ""): void => {
+    if (depth > 5 || value === null || value === undefined) return;
+    if (typeof value === "string") {
+      parts.push(value);
+      if (parentKey === "quotaId") quotaIds.push(value);
+      return;
+    }
+    if (typeof value !== "object" || visited.has(value)) return;
+    visited.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1, parentKey);
+      return;
+    }
+    if (
+      parentKey === "quotaDimensions" &&
+      Object.keys(value).some((key) => key.toLowerCase() === "model")
+    ) {
+      hasModelDimension = true;
+    }
+    for (const key of [
+      "message",
+      "status",
+      "reason",
+      "description",
+      "quotaMetric",
+      "quotaId",
+      "quotaDimensions",
+      "subject",
+      "details",
+      "errorDetails",
+      "violations",
+      "error",
+    ]) {
+      visit(objectProperty(value, key), depth + 1, key);
+    }
+  };
+  visit(error, 0);
+
+  const text = parts.join(" ").toLowerCase();
+  const globalScope =
+    /\bproject[\s_-]*wide\b|\bapi[\s_-]*key[\s_-]*wide\b|\bbilling[\s_-]*account[\s_-]*wide\b|\bacross all models\b|\ball models\b|\bglobal quota\b/.test(
+      text,
+    );
+  const quotaExhaustion =
+    (/\bquota\b|\brate[\s_-]*limit\b/.test(text) &&
+      /\b(exhausted|exceeded|depleted|blocked|unavailable)\b/.test(text)) ||
+    /resource[_\s-]*exhausted/.test(text);
+  const projectQuotaWithoutModelDimension =
+    !hasModelDimension &&
+    quotaIds.some((quotaId) =>
+      /per[\s_-]?project/i.test(quotaId) &&
+      !/per[\s_-]?model/i.test(quotaId),
+    );
+  return quotaExhaustion &&
+    (globalScope || projectQuotaWithoutModelDimension);
 }
 
 export function geminiRequestFailure(

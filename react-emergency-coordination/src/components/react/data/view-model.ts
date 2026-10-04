@@ -138,13 +138,6 @@ const agentPurposes: Record<AgentType, string> = {
   RESPONSE_PLANNING: "Builds an executable response recommendation.",
 };
 
-function agentSummary(run: AgentRun): string {
-  if (run.status !== "COMPLETED" || run.output === null) return run.errorMessage ?? "DATA UNAVAILABLE";
-  if (run.agentType === "RISK_ASSESSMENT") return "Risk factors and priority assessed.";
-  if (run.agentType === "RESOURCE_ROUTING") return "Resource, facility, and route feasibility assessed.";
-  return "Response plan recommendation generated.";
-}
-
 function runsForSnapshot(snapshot: DemoStateSnapshot | DemoSnapshot): readonly AgentRun[] {
   if (!("stage" in snapshot)) return snapshot.agentRuns;
   if (snapshot.stage === "EMERGENCY_INITIALIZED" || snapshot.stage === "ANALYZING" || snapshot.stage === "REASSESSING") {
@@ -164,13 +157,17 @@ function actionForPlan(state: EmergencyState, plan: ResponsePlan | null): Dashbo
 
 function toTimeline(changes: readonly StateChange[]): DashboardTimelineItem[] {
   return [...new Map(changes.map((change) => [change.id, change])).values()]
-    .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt))
+    .map((change, insertionOrder) => ({ change, insertionOrder }))
+    .sort((left, right) =>
+      Date.parse(left.change.occurredAt) - Date.parse(right.change.occurredAt) ||
+      left.insertionOrder - right.insertionOrder,
+    )
     .map((change) => ({
-      id: change.id,
-      timeLabel: timeLabel(change.occurredAt),
-      title: change.description,
-      detail: `${change.entityType} ${change.entityId}`,
-      tone: change.changeType === "STATUS_CHANGED" ? "red" : change.entityType === "PLAN" ? "green" : "gray",
+      id: change.change.id,
+      timeLabel: timeLabel(change.change.occurredAt),
+      title: change.change.description,
+      detail: `${change.change.entityType} ${change.change.entityId}`,
+      tone: change.change.changeType === "STATUS_CHANGED" ? "red" : change.change.entityType === "PLAN" ? "green" : "gray",
     }));
 }
 
@@ -180,7 +177,9 @@ export function createDashboardViewModel(
   const { state, stateChanges } = snapshot;
   const idle = "stage" in snapshot && snapshot.stage === "IDLE";
   const agentRuns = runsForSnapshot(snapshot);
-  const plan = state.activePlan;
+  const plan = "currentPlan" in snapshot
+    ? snapshot.currentPlan
+    : state.activePlan;
   const approvalAvailable = "stage" in snapshot
     ? (snapshot.stage === "AWAITING_APPROVAL" || snapshot.stage === "AWAITING_REVISED_APPROVAL") && plan?.status === "PENDING_APPROVAL"
     : plan?.status === "PENDING_APPROVAL";
@@ -207,7 +206,7 @@ export function createDashboardViewModel(
       totalCapacity: facility.totalCapacity,
       status: facility.status,
       statusLabel: titleCase(facility.status),
-      tone: facility.status === "OPERATIONAL" ? "green" : facility.status === "LIMITED" ? "amber" : "red",
+      tone: facility.status === "OPERATIONAL" ? "green" : facility.status === "LIMITED" ? "amber" : facility.status === "FULL" ? "blue" : "red",
     })),
     routes: state.routes.map((route) => ({
       id: route.id,
@@ -218,18 +217,43 @@ export function createDashboardViewModel(
     })),
     activePlan: plan,
     actions: actionForPlan(state, plan),
-    agents: agentRuns.map((run) => ({
-      id: run.id,
-      label: agentLabels[run.agentType],
-      status: idle ? "STANDBY" : run.status,
-      statusLabel: idle ? "STANDBY" : titleCase(run.status),
-      timeLabel: idle ? "Not started" : timeLabel(run.completedAt ?? run.startedAt),
-      tone: idle ? "gray" : run.status === "COMPLETED" ? "green" : run.status === "RUNNING" ? "amber" : "red",
-      purpose: agentPurposes[run.agentType],
-      durationLabel: idle ? "—" : run.durationMs === null ? "Duration unavailable" : `${run.durationMs} ms`,
-      resultSummary: idle ? "Awaiting demo start" : agentSummary(run),
-      affectedPlan: !idle && (run.agentType === "RESPONSE_PLANNING" || run.status === "COMPLETED"),
-    })),
+    agents: agentRuns.map((run) => {
+      const hasWorkflowResult = "stage" in snapshot && (
+        run.agentType === "RISK_ASSESSMENT"
+          ? snapshot.riskAssessment !== null
+          : run.agentType === "RESOURCE_ROUTING"
+            ? snapshot.resourceRoutingAssessment !== null
+            : snapshot.responsePlanningResult !== null
+      );
+      const status = idle
+        ? "STANDBY"
+        : hasWorkflowResult
+          ? "COMPLETED"
+          : "stage" in snapshot && snapshot.stage === "FAILED" && run.status !== "COMPLETED"
+            ? run.status
+            : "PENDING";
+      const resultSummary = idle
+        ? "Awaiting demo start"
+        : "stage" in snapshot && run.agentType === "RISK_ASSESSMENT" && snapshot.riskAssessment
+          ? `${snapshot.riskAssessment.severity} severity · priority ${snapshot.riskAssessment.priority}`
+          : "stage" in snapshot && run.agentType === "RESOURCE_ROUTING" && snapshot.resourceRoutingAssessment
+            ? `${snapshot.resourceRoutingAssessment.resources.length} resources, ${snapshot.resourceRoutingAssessment.facilities.length} facilities, and ${snapshot.resourceRoutingAssessment.routes.length} routes evaluated.`
+            : "stage" in snapshot && run.agentType === "RESPONSE_PLANNING" && snapshot.responsePlanningResult
+              ? `${snapshot.responsePlanningResult.plan.id} generated · validation ${snapshot.responsePlanningResult.validation.valid ? "passed" : "failed"}`
+              : idle ? "Awaiting demo start" : run.errorMessage ?? "Workflow result unavailable";
+      return {
+        id: run.id,
+        label: agentLabels[run.agentType],
+        status,
+        statusLabel: idle ? "STANDBY" : titleCase(status),
+        timeLabel: idle ? "Not started" : hasWorkflowResult ? "Result available" : "Not available",
+        tone: idle ? "gray" : status === "COMPLETED" ? "green" : status === "RUNNING" ? "amber" : status === "PENDING" ? "gray" : "red",
+        purpose: agentPurposes[run.agentType],
+        durationLabel: idle ? "—" : "Duration unavailable",
+        resultSummary,
+        affectedPlan: !idle && hasWorkflowResult,
+      };
+    }),
     timeline: toTimeline(stateChanges),
     reassessment: {
       required: changedRoute !== undefined,

@@ -18,8 +18,13 @@ import {
   generateStructuredJsonWithMetadata,
   GeminiError,
   type GenerateStructuredJsonOptions,
+  type GeminiGenerationDependencies,
 } from "../src/lib/ai/gemini";
-import type { GeminiGenerationMetadata } from "../src/lib/ai/gemini-contract";
+import {
+  GeminiModelSchema,
+  type GeminiGenerationMetadata,
+  type GeminiModel,
+} from "../src/lib/ai/gemini-contract";
 import { getDemoState } from "../src/lib/demo/fixtures";
 import { createDemoController } from "../src/lib/demo/controller";
 import { submitPlanForApproval } from "../src/lib/human-approval/plan-approval";
@@ -69,43 +74,90 @@ assert.deepEqual(decodePlanSource("legacy plan without provenance"), {
   rationale: "legacy plan without provenance",
   source: "UNKNOWN",
 });
-const availableResource = initial.resources.find(
-  (resource) => resource.status === "AVAILABLE",
+const rescueTeam = initial.resources.find(
+  (resource) => resource.id === "RES-RT-02",
 );
-const availableRoute = initial.routes.find(
-  (route) =>
-    route.status === "OPEN" &&
-    route.destination.latitude === initial.incident.location.latitude &&
-    route.destination.longitude === initial.incident.location.longitude,
+const primaryAmbulance = initial.resources.find(
+  (resource) => resource.id === "RES-AMB-01",
 );
-assert.ok(availableResource);
-assert.ok(availableRoute);
+const alternateAmbulance = initial.resources.find(
+  (resource) => resource.id === "RES-AMB-02",
+);
+const primaryRoute = initial.routes.find((route) => route.id === "R1");
+const alternateRoute = initial.routes.find((route) => route.id === "R2");
+const facilityRoute = initial.routes.find((route) => route.id === "R3");
+const receivingFacility = initial.facilities.find(
+  (facility) => facility.id === "FAC-HOSP-B",
+);
+assert.ok(rescueTeam);
+assert.ok(primaryAmbulance);
+assert.ok(alternateAmbulance);
+assert.ok(primaryRoute);
+assert.ok(alternateRoute);
+assert.ok(facilityRoute);
+assert.ok(receivingFacility);
+const incidentTarget = {
+  latitude: initial.incident.location.latitude,
+  longitude: initial.incident.location.longitude,
+};
 let mockAiGeneratorCalled = false;
 const mockAiProposal: ResponsePlanningOutput = ResponsePlanningOutputSchema.parse({
   primaryPlan: {
     summary: "Mock AI recommendation based on the supplied emergency state.",
-    rationale: "Use an available resource and a verified open route.",
+    rationale: "Dispatch a rescue team and ambulance, then allocate reachable capacity.",
     priority: "URGENT",
     actions: [
       {
         sequence: 1,
         type: "DISPATCH_RESOURCE",
-        description: `Dispatch ${availableResource.name} via ${availableRoute.name}.`,
+        description: `Dispatch ${rescueTeam.name} via ${alternateRoute.name}.`,
         priority: "URGENT",
-        resourceIds: [availableResource.id],
+        resourceIds: [rescueTeam.id],
         facilityIds: [],
-        routeIds: [availableRoute.id],
+        routeIds: [alternateRoute.id],
         capacityDemand: null,
+        targetLocation: incidentTarget,
+        estimatedDurationMinutes: alternateRoute.estimatedTravelMinutes,
+      },
+      {
+        sequence: 2,
+        type: "DISPATCH_RESOURCE",
+        description: `Dispatch ${primaryAmbulance.name} via ${primaryRoute.name}.`,
+        priority: "URGENT",
+        resourceIds: [primaryAmbulance.id],
+        facilityIds: [],
+        routeIds: [primaryRoute.id],
+        capacityDemand: null,
+        targetLocation: incidentTarget,
+        estimatedDurationMinutes: primaryRoute.estimatedTravelMinutes,
+      },
+      {
+        sequence: 3,
+        type: "NOTIFY_FACILITY",
+        description: `Allocate recorded capacity at ${receivingFacility.name}.`,
+        priority: "HIGH",
+        resourceIds: [],
+        facilityIds: [receivingFacility.id],
+        routeIds: [facilityRoute.id],
+        capacityDemand: receivingFacility.availableCapacity,
         targetLocation: {
-          latitude: initial.incident.location.latitude,
-          longitude: initial.incident.location.longitude,
+          latitude: receivingFacility.location.latitude,
+          longitude: receivingFacility.location.longitude,
         },
-        estimatedDurationMinutes: availableRoute.estimatedTravelMinutes,
+        estimatedDurationMinutes: facilityRoute.estimatedTravelMinutes,
       },
     ],
   },
-  alternatives: [],
-  constraints: [],
+  alternatives: [
+    {
+      summary: `Use ${alternateAmbulance.name} via ${alternateRoute.name}.`,
+      rationale: "This pairing uses a currently available ambulance and an open route with matching endpoints.",
+      resourceIds: [alternateAmbulance.id],
+      facilityIds: [],
+      routeIds: [alternateRoute.id],
+    },
+  ],
+  constraints: ["Only recorded facility capacity connected by an open route is allocated."],
   reasoning: "Mocked structured AI output; no provider request is made.",
   confidence: 1,
 });
@@ -122,7 +174,166 @@ const aiResult = await runResponsePlanning(
 );
 assert.equal(mockAiGeneratorCalled, true);
 assert.equal(aiResult.plan.source, "GEMINI");
+assert.equal(aiResult.plan.id, "PLAN-900");
+assert.equal(aiResult.plan.incidentId, initial.incident.id);
+assert.equal(aiResult.plan.stateVersion, initial.stateVersion);
+assert.equal(aiResult.plan.priority, "URGENT");
 assert.equal(aiResult.validation.valid, true);
+assert.equal(aiResult.actions.length, 3);
+assert.equal(aiResult.alternatives.length, 1);
+assert.deepEqual(aiResult.plan.dependencies.resourceIds, [
+  primaryAmbulance.id,
+  rescueTeam.id,
+]);
+assert.deepEqual(aiResult.plan.dependencies.facilityIds, [receivingFacility.id]);
+assert.deepEqual(aiResult.plan.dependencies.routeIds, [
+  primaryRoute.id,
+  alternateRoute.id,
+  facilityRoute.id,
+]);
+assert.match(aiResult.plan.rationale, /CRITICAL severity, risk priority 5, 35 affected people/);
+assert.match(aiResult.plan.rationale, /25 remain without a verified facility allocation/);
+assert.match(aiResult.constraints.join(" "), /25 remain without a verified facility allocation/);
+
+async function planWithModelFallback(
+  planId: string,
+  failures: Partial<Record<GeminiModel, number>>,
+): Promise<{ modelCalls: GeminiModel[]; result: Awaited<ReturnType<typeof runResponsePlanning>> }> {
+  const modelCalls: GeminiModel[] = [];
+  const result = await runResponsePlanning(
+    initial,
+    assessments.riskAssessment,
+    assessments.resourceRoutingAssessment,
+    {
+      planId,
+      generateStructuredJson: async <T>(
+        options: GenerateStructuredJsonOptions<T>,
+      ): Promise<T> => {
+        const generated = await generateStructuredJsonWithMetadata(
+          options,
+          {
+            request: async (parameters) => {
+              const model = GeminiModelSchema.parse(parameters.model);
+              modelCalls.push(model);
+              const status = failures[model];
+              if (status !== undefined) {
+                throw Object.assign(new Error("sanitized fixture provider failure"), {
+                  status,
+                });
+              }
+              return {
+                text: JSON.stringify(mockAiProposal),
+              } as Awaited<ReturnType<GeminiGenerationDependencies["request"]>>;
+            },
+          },
+        );
+        options.onMetadata?.(generated.metadata);
+        return generated.value;
+      },
+    },
+  );
+  return { modelCalls, result };
+}
+
+const model37Plan = await planWithModelFallback("PLAN-937", {
+  "gemini-3.8-flash": 429,
+});
+assert.deepEqual(model37Plan.modelCalls, ["gemini-3.8-flash", "gemini-3.7-flash"]);
+assert.equal(model37Plan.result.plan.source, "GEMINI");
+assert.equal(model37Plan.result.generation?.selectedModel, "gemini-3.7-flash");
+
+const model25Plan = await planWithModelFallback("PLAN-925", {
+  "gemini-3.8-flash": 503,
+  "gemini-3.7-flash": 429,
+});
+assert.deepEqual(model25Plan.modelCalls, [
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-2.5-flash",
+]);
+assert.equal(model25Plan.result.plan.source, "GEMINI");
+assert.equal(model25Plan.result.generation?.selectedModel, "gemini-2.5-flash");
+
+async function expectPlanningFailure(
+  proposal: ResponsePlanningOutput,
+  expectedCode: string,
+): Promise<void> {
+  await assert.rejects(
+    runResponsePlanning(
+      initial,
+      assessments.riskAssessment,
+      assessments.resourceRoutingAssessment,
+      {
+        planId: "PLAN-901",
+        generateStructuredJson: async <T>(options: GenerateStructuredJsonOptions<T>) =>
+          options.schema.parse(proposal),
+      },
+    ),
+    (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === expectedCode,
+  );
+}
+
+await expectPlanningFailure(
+  {
+    ...mockAiProposal,
+    primaryPlan: {
+      ...mockAiProposal.primaryPlan,
+      actions: mockAiProposal.primaryPlan.actions.slice(0, 1),
+    },
+  },
+  "RESPONSE_PLANNING_PRIMARY_PLAN_INVALID",
+);
+await expectPlanningFailure(
+  {
+    ...mockAiProposal,
+    primaryPlan: {
+      ...mockAiProposal.primaryPlan,
+      actions: mockAiProposal.primaryPlan.actions.map((action, index) =>
+        index === 1 ? { ...action, resourceIds: ["UNKNOWN-RESOURCE"] } : action,
+      ),
+    },
+  },
+  "RESPONSE_PLANNING_OUTPUT_INVALID",
+);
+await expectPlanningFailure(
+  {
+    ...mockAiProposal,
+    primaryPlan: {
+      ...mockAiProposal.primaryPlan,
+      actions: mockAiProposal.primaryPlan.actions.map((action, index) =>
+        index === 0 ? { ...action, routeIds: ["UNKNOWN-ROUTE"] } : action,
+      ),
+    },
+  },
+  "RESPONSE_PLANNING_OUTPUT_INVALID",
+);
+await expectPlanningFailure(
+  {
+    ...mockAiProposal,
+    primaryPlan: {
+      ...mockAiProposal.primaryPlan,
+      actions: mockAiProposal.primaryPlan.actions.map((action, index) =>
+        index === 2 ? { ...action, capacityDemand: receivingFacility.availableCapacity + 1 } : action,
+      ),
+    },
+  },
+  "RESPONSE_PLANNING_PRIMARY_PLAN_INVALID",
+);
+await expectPlanningFailure(
+  { ...mockAiProposal, constraints: [] },
+  "RESPONSE_PLANNING_PRIMARY_PLAN_INVALID",
+);
+await expectPlanningFailure(
+  {
+    ...mockAiProposal,
+    primaryPlan: { ...mockAiProposal.primaryPlan, priority: "HIGH" },
+  },
+  "RESPONSE_PLANNING_PRIMARY_PLAN_INVALID",
+);
 const successfulMetadata: GeminiGenerationMetadata = {
   selectedModel: "gemini-3.8-flash",
   attemptedModels: ["gemini-3.8-flash"],
@@ -151,7 +362,10 @@ function mockDependencies(
 }
 
 function unavailableError(
-  category: "RATE_LIMITED" | "PROVIDER_UNAVAILABLE",
+  category:
+    | "RATE_LIMITED"
+    | "PROJECT_QUOTA_EXHAUSTED"
+    | "PROVIDER_UNAVAILABLE",
   attemptedModels: GeminiGenerationMetadata["attemptedModels"],
 ): Error & {
   code: string;
@@ -164,7 +378,11 @@ function unavailableError(
     finalProviderFailure: {
       code: "GEMINI_AI_UNAVAILABLE",
       category,
-      httpStatus: category === "RATE_LIMITED" ? 429 : 503,
+      httpStatus:
+        category === "RATE_LIMITED" ||
+        category === "PROJECT_QUOTA_EXHAUSTED"
+          ? 429
+          : 503,
     },
   };
   return Object.assign(new Error("sanitized"), {
@@ -190,7 +408,11 @@ await assert.rejects(
     error.code === "GEMINI_AI_UNAVAILABLE" &&
     error.metadata?.finalProviderFailure?.category === "RATE_LIMITED",
 );
-assert.deepEqual(rateLimitModels, ["gemini-3.8-flash"]);
+assert.deepEqual(rateLimitModels, [
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-2.5-flash",
+]);
 
 const serviceUnavailableModels: string[] = [];
 await assert.rejects(
@@ -273,18 +495,49 @@ const quota = await runAutoAiWorkflow(
   "PLAN-001",
   mockDependencies({
     riskAssessment: async () => {
-      throw unavailableError("RATE_LIMITED", ["gemini-3.8-flash"]);
+      throw unavailableError("RATE_LIMITED", [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-2.5-flash",
+      ]);
     },
   }),
 );
 assert.equal(quota.responsePlanningResult.plan.source, "DETERMINISTIC_FALLBACK");
 assert.equal(quota.responsePlanningResult.generation?.failureCategory, "RATE_LIMITED");
-assert.equal(quota.responsePlanningResult.generation?.modelsAttempted.length, 1);
+assert.deepEqual(quota.responsePlanningResult.generation?.modelsAttempted, [
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-2.5-flash",
+]);
 assert.equal(quota.responsePlanningResult.validation.valid, true);
 const quotaApproval = submitPlanForApproval(quota.responsePlanningResult.plan);
 assert.equal(quotaApproval.success, true);
 if (quotaApproval.success) assert.equal(quotaApproval.plan.status, "PENDING_APPROVAL");
 assert.equal(responsePlanSourceLabel(quota.responsePlanningResult.plan.source), "DETERMINISTIC FALLBACK");
+
+const projectQuota = await runAutoAiWorkflow(
+  initial,
+  "PLAN-001",
+  mockDependencies({
+    riskAssessment: async () => {
+      throw unavailableError("PROJECT_QUOTA_EXHAUSTED", ["gemini-3.8-flash"]);
+    },
+  }),
+);
+assert.equal(
+  projectQuota.responsePlanningResult.plan.source,
+  "DETERMINISTIC_FALLBACK",
+);
+assert.equal(
+  projectQuota.responsePlanningResult.generation?.failureCategory,
+  "PROJECT_QUOTA_EXHAUSTED",
+);
+assert.deepEqual(
+  projectQuota.responsePlanningResult.generation?.modelsAttempted,
+  ["gemini-3.8-flash"],
+);
+assert.equal(projectQuota.responsePlanningResult.validation.valid, true);
 
 const providerUnavailable = await runAutoAiWorkflow(
   initial,
@@ -316,6 +569,19 @@ const invalidStructuredOutput = await runAutoAiWorkflow(
     responsePlanning: async () => {
       throw Object.assign(new Error("invalid structured output"), {
         code: "RESPONSE_PLANNING_SCHEMA_VALIDATION_FAILED",
+        geminiGeneration: {
+          selectedModel: null,
+          attemptedModels: [
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-2.5-flash",
+          ],
+          fallbackUsed: true,
+          finalProviderFailure: {
+            code: "GEMINI_INVALID_JSON",
+            category: "PERMANENT",
+          },
+        } satisfies GeminiGenerationMetadata,
       });
     },
   }),
@@ -325,6 +591,10 @@ assert.equal(
   "DETERMINISTIC_FALLBACK",
 );
 assert.equal(invalidStructuredOutput.responsePlanningResult.validation.valid, true);
+assert.deepEqual(
+  invalidStructuredOutput.responsePlanningResult.generation?.modelsAttempted,
+  ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-2.5-flash"],
+);
 
 const noRouteState = { ...initial, routes: [] };
 await assert.rejects(

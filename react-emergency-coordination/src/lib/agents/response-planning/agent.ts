@@ -20,6 +20,18 @@ import {
   validatePlan,
 } from "../../emergency-engine/plan-validator";
 import {
+  canAssignResource,
+  isResourceAvailable,
+} from "../../emergency-engine/resources";
+import {
+  isFacilityAvailable,
+  validateFacilityStatus,
+} from "../../emergency-engine/facilities";
+import {
+  isRouteFullyOpen,
+  validateRouteUse,
+} from "../../emergency-engine/routes";
+import {
   ResourceRoutingAssessmentSchema,
   type ResourceRoutingAssessment,
 } from "../resource-routing/schema";
@@ -55,7 +67,7 @@ DO NOT
 - Silently repair missing, conflicting, or unavailable facts.
 
 OUTPUT
-Return only the requested structured response. Propose ordered, uniquely sequenced actions. Keep recommendations and rationale grounded in the supplied facts. If information is incomplete, state the uncertainty in constraints or reasoning instead of filling gaps.`;
+Return only the requested structured response. Propose ordered, uniquely sequenced actions. For a FIRE incident with an affected population, when those capabilities and routes are present, provide separate rescue-team and ambulance actions, and allocate people only to reachable facilities with recorded available capacity. Account for the affected population: use all reachable capacity up to the affected-population total and state any remaining capacity shortfall in constraints and rationale. Include a feasible recommendation-only alternative when a distinct available resource/route pairing exists; omit alternatives that are not feasible from the supplied facts. Keep recommendations grounded in the supplied facts. If information is incomplete, state the uncertainty instead of filling gaps.`;
 
 export type ResponsePlanningAgentErrorCode =
   | "RESPONSE_PLANNING_INPUT_INVALID"
@@ -475,6 +487,36 @@ function validateProposalReferences(
       alternative.facilityIds,
       alternative.routeIds,
     );
+    for (const id of alternative.resourceIds) {
+      const resource = state.resources.find((candidate) => candidate.id === id);
+      if (
+        resource !== undefined &&
+        (!isResourceAvailable(resource) ||
+          !canAssignResource(state.resources, id, "RESPONSE-PLANNING-ALTERNATIVE").valid)
+      ) {
+        issues.push(`Alternative ${index + 1} references unavailable resource ${id}.`);
+      }
+    }
+    for (const id of alternative.facilityIds) {
+      const facility = state.facilities.find((candidate) => candidate.id === id);
+      if (
+        facility !== undefined &&
+        (!validateFacilityStatus(facility).valid ||
+          !isFacilityAvailable(facility) ||
+          facility.availableCapacity === 0)
+      ) {
+        issues.push(`Alternative ${index + 1} references unavailable facility ${id}.`);
+      }
+    }
+    for (const id of alternative.routeIds) {
+      const route = state.routes.find((candidate) => candidate.id === id);
+      if (
+        route !== undefined &&
+        (!validateRouteUse(route).valid || !isRouteFullyOpen(route))
+      ) {
+        issues.push(`Alternative ${index + 1} references unusable route ${id}.`);
+      }
+    }
   }
 
   if (issues.length > 0) {
@@ -484,6 +526,265 @@ function validateProposalReferences(
       issues,
     );
   }
+}
+
+type FeasibleAccessPair = {
+  resourceId: string;
+  routeId: string;
+  resourceType: "RESCUE_TEAM" | "AMBULANCE";
+};
+
+function sameLocation(
+  left: { latitude: number; longitude: number },
+  right: { latitude: number; longitude: number },
+): boolean {
+  return left.latitude === right.latitude && left.longitude === right.longitude;
+}
+
+function fireAccessPairs(state: EmergencyState): FeasibleAccessPair[] {
+  const pairs: FeasibleAccessPair[] = [];
+  for (const resource of state.resources) {
+    if (
+      (resource.type !== "RESCUE_TEAM" && resource.type !== "AMBULANCE") ||
+      !isResourceAvailable(resource) ||
+      !canAssignResource(state.resources, resource.id, "RESPONSE-PLANNING-CANDIDATE").valid
+    ) {
+      continue;
+    }
+    const capabilityPattern =
+      resource.type === "RESCUE_TEAM" ? /rescue|structural/i : /medical|patient transport/i;
+    if (!resource.capabilities.some((capability) => capabilityPattern.test(capability))) {
+      continue;
+    }
+    for (const route of state.routes) {
+      if (
+        isRouteFullyOpen(route) &&
+        validateRouteUse(route).valid &&
+        sameLocation(route.origin, resource.location) &&
+        sameLocation(route.destination, state.incident.location)
+      ) {
+        pairs.push({
+          resourceId: resource.id,
+          routeId: route.id,
+          resourceType: resource.type,
+        });
+      }
+    }
+  }
+  return pairs;
+}
+
+function validateFirePlanCompleteness(
+  output: ResponsePlanningOutput,
+  state: EmergencyState,
+  riskAssessment: RiskAssessment,
+): { constraints: string[] } {
+  if (state.incident.type !== "FIRE" || state.incident.affectedPopulation === 0) {
+    return { constraints: [] };
+  }
+
+  const issues: string[] = [];
+  const constraints: string[] = [];
+  if (output.constraints.length === 0) {
+    issues.push("A fire response plan must state its operational constraints.");
+  }
+  if (
+    (state.incident.severity === "CRITICAL" ||
+      state.incident.priority === "URGENT" ||
+      riskAssessment.priority >= 5) &&
+    output.primaryPlan.priority !== "URGENT"
+  ) {
+    issues.push("A critical or urgent incident requires an URGENT primary plan priority.");
+  }
+  const accessPairs = fireAccessPairs(state);
+  const previouslyDeployedTypes = new Set<string>();
+  let previouslyAllocatedCapacity = 0;
+  if (state.activePlan?.status === "COMPLETED") {
+    for (const reference of state.activePlan.actions) {
+      const action = state.planActions.find(
+        (candidate) =>
+          candidate.id === reference.actionId &&
+          candidate.sequence === reference.sequence,
+      );
+      if (action === undefined) continue;
+      for (const resourceId of action.resourceIds) {
+        const resource = state.resources.find((candidate) => candidate.id === resourceId);
+        if (
+          resource?.status === "DISPATCHED" &&
+          resource.currentAssignmentId === action.id
+        ) {
+          previouslyDeployedTypes.add(resource.type);
+        }
+      }
+      if (action.capacityDemand !== undefined && action.capacityDemand !== null) {
+        previouslyAllocatedCapacity += action.capacityDemand;
+      }
+    }
+  }
+  const primaryPairs = new Set<string>();
+  const matchingActions = new Map<FeasibleAccessPair["resourceType"], Set<number>>([
+    ["RESCUE_TEAM", new Set()],
+    ["AMBULANCE", new Set()],
+  ]);
+
+  for (const [index, action] of output.primaryPlan.actions.entries()) {
+    if (
+      action.targetLocation === null ||
+      !sameLocation(action.targetLocation, state.incident.location)
+    ) {
+      continue;
+    }
+    for (const pair of accessPairs) {
+      const compatibleActionType =
+        pair.resourceType === "RESCUE_TEAM"
+          ? action.type === "DISPATCH_RESOURCE" || action.type === "ASSIGN_RESOURCE"
+          : action.type === "DISPATCH_RESOURCE" ||
+            action.type === "ASSIGN_RESOURCE" ||
+            action.type === "TRANSPORT_PEOPLE";
+      if (
+        compatibleActionType &&
+        action.resourceIds.includes(pair.resourceId) &&
+        action.routeIds.includes(pair.routeId)
+      ) {
+        primaryPairs.add(`${pair.resourceId}:${pair.routeId}`);
+        matchingActions.get(pair.resourceType)?.add(index);
+      }
+    }
+  }
+
+  for (const resourceType of ["RESCUE_TEAM", "AMBULANCE"] as const) {
+    if (!accessPairs.some((pair) => pair.resourceType === resourceType)) {
+      if (previouslyDeployedTypes.has(resourceType)) {
+        constraints.push(
+          `A route-compatible ${resourceType.toLowerCase()} remains dispatched under the completed prior plan and is not reassigned.`,
+        );
+      } else {
+        issues.push(`No currently available, route-compatible ${resourceType.toLowerCase()} is recorded.`);
+      }
+    } else if ((matchingActions.get(resourceType)?.size ?? 0) === 0) {
+      issues.push(`The primary plan must assign a feasible ${resourceType.toLowerCase()} to the incident.`);
+    }
+  }
+  const rescueActionIndexes = matchingActions.get("RESCUE_TEAM") ?? new Set<number>();
+  const ambulanceActionIndexes = matchingActions.get("AMBULANCE") ?? new Set<number>();
+  if (
+    rescueActionIndexes.size > 0 &&
+    ambulanceActionIndexes.size > 0 &&
+    ![...rescueActionIndexes].some((rescueIndex) =>
+      [...ambulanceActionIndexes].some((ambulanceIndex) => rescueIndex !== ambulanceIndex),
+    )
+  ) {
+    issues.push("Rescue-team and ambulance response must be represented as separate primary actions.");
+  }
+
+  const feasibleFacilities = state.facilities.flatMap((facility) => {
+    if (
+      !validateFacilityStatus(facility).valid ||
+      !isFacilityAvailable(facility) ||
+      facility.availableCapacity <= 0 ||
+      !facility.capabilities.some((capability) => /emergency care|medical|trauma/i.test(capability))
+    ) {
+      return [];
+    }
+    const routes = state.routes.filter(
+      (route) =>
+        isRouteFullyOpen(route) &&
+        validateRouteUse(route).valid &&
+        sameLocation(route.origin, state.incident.location) &&
+        sameLocation(route.destination, facility.location),
+    );
+    return routes.length > 0 ? [{ facility, routes }] : [];
+  });
+  const reachableCapacity = feasibleFacilities.reduce(
+    (total, { facility }) => total + facility.availableCapacity,
+    0,
+  );
+  if (reachableCapacity === 0 && previouslyAllocatedCapacity === 0) {
+    issues.push("No operational facility with recorded capacity is reachable by an open route.");
+  }
+
+  let allocatedCapacity = 0;
+  const allocationActionIndexes = new Set<number>();
+  for (const [index, action] of output.primaryPlan.actions.entries()) {
+    if (
+      action.facilityIds.length !== 1 ||
+      action.capacityDemand === undefined ||
+      action.capacityDemand === null ||
+      !["NOTIFY_FACILITY", "SHELTER_PEOPLE", "TRANSPORT_PEOPLE"].includes(action.type)
+    ) {
+      continue;
+    }
+    const feasibleFacility = feasibleFacilities.find(
+      ({ facility }) => facility.id === action.facilityIds[0],
+    );
+    if (
+      feasibleFacility === undefined ||
+      action.targetLocation === null ||
+      !sameLocation(action.targetLocation, feasibleFacility.facility.location) ||
+      !action.routeIds.some((routeId) =>
+        feasibleFacility.routes.some((route) => route.id === routeId),
+      )
+    ) {
+      continue;
+    }
+    allocatedCapacity += action.capacityDemand;
+    allocationActionIndexes.add(index);
+  }
+
+  const remainingPopulation = Math.max(
+    0,
+    state.incident.affectedPopulation - previouslyAllocatedCapacity,
+  );
+  const requiredAllocation = Math.min(remainingPopulation, reachableCapacity);
+  if (allocatedCapacity < requiredAllocation) {
+    issues.push(
+      `The primary plan must allocate at least ${requiredAllocation} people to reachable facilities with recorded capacity.`,
+    );
+  }
+  if (
+    requiredAllocation > 0 &&
+    ![...allocationActionIndexes].some(
+      (allocationIndex) =>
+        !rescueActionIndexes.has(allocationIndex) &&
+        !ambulanceActionIndexes.has(allocationIndex),
+    )
+  ) {
+    issues.push("Facility allocation must be represented as a separate primary action.");
+  }
+
+  const distinctFeasibleAlternatives = accessPairs.some(
+    (pair) => !primaryPairs.has(`${pair.resourceId}:${pair.routeId}`),
+  );
+  const hasFeasibleAlternative = output.alternatives.some((alternative) =>
+    accessPairs.some(
+      (pair) =>
+        !primaryPairs.has(`${pair.resourceId}:${pair.routeId}`) &&
+        alternative.resourceIds.includes(pair.resourceId) &&
+        alternative.routeIds.includes(pair.routeId),
+    ),
+  );
+  if (distinctFeasibleAlternatives && !hasFeasibleAlternative) {
+    issues.push("A feasible distinct resource/route alternative must be included.");
+  }
+
+  if (issues.length > 0) {
+    throw new ResponsePlanningAgentError(
+      "RESPONSE_PLANNING_PRIMARY_PLAN_INVALID",
+      "The proposed fire response plan is operationally incomplete.",
+      issues,
+    );
+  }
+
+  const unallocatedPopulation = Math.max(
+    0,
+    remainingPopulation - allocatedCapacity,
+  );
+  if (unallocatedPopulation > 0) {
+    constraints.push(
+      `After prior plan allocations, recorded reachable facility capacity covers ${allocatedCapacity} of ${remainingPopulation} remaining people; ${unallocatedPopulation} remain without a verified facility allocation.`,
+    );
+  }
+  return { constraints };
 }
 
 function createPlanActions(
@@ -656,6 +957,7 @@ export async function runResponsePlanning(
   }
   const output = outputValidation.data;
   validateProposalReferences(output, state);
+  const operationalCoverage = validateFirePlanCompleteness(output, state, risk);
 
   const timestamp = new Date().toISOString();
   const planId = dependencies.planId ?? crypto.randomUUID();
@@ -670,6 +972,10 @@ export async function runResponsePlanning(
     ...actions.map((action) => action.id),
   ]);
   const alternatives = createAlternatives(output, state, generatedCandidateIds);
+  const incidentContext =
+    `Recorded incident context: ${state.incident.severity} severity, ` +
+    `risk priority ${risk.priority}, ${state.incident.affectedPopulation} affected people.`;
+  const operationalContext = operationalCoverage.constraints.join(" ");
   const plan: ResponsePlan = {
     id: planId,
     incidentId: state.incident.id,
@@ -677,7 +983,9 @@ export async function runResponsePlanning(
     status: "DRAFT",
     priority: output.primaryPlan.priority,
     summary: output.primaryPlan.summary,
-    rationale: output.primaryPlan.rationale,
+    rationale: [output.primaryPlan.rationale, incidentContext, operationalContext]
+      .filter((part) => part.length > 0)
+      .join(" "),
     source: "GEMINI",
     generatedAt: timestamp,
     updatedAt: timestamp,
@@ -709,7 +1017,7 @@ export async function runResponsePlanning(
     plan: ResponsePlanSchema.parse(plan),
     actions,
     alternatives,
-    constraints: output.constraints,
+    constraints: [...output.constraints, ...operationalCoverage.constraints],
     reasoning: output.reasoning,
     confidence: output.confidence,
     validation,

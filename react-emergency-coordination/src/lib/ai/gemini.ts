@@ -3,13 +3,13 @@ import "server-only";
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import {
-  classifyGeminiProviderFailure,
   GeminiError,
   geminiRequestFailure,
   parseStructuredJson,
   requireGeminiApiKey,
   type GeminiFailureCategory,
   type GeminiGenerationMetadata,
+  type GeminiModelFailure,
   type GeminiModel,
   type GeminiErrorCode,
 } from "./gemini-contract";
@@ -18,6 +18,7 @@ export { GeminiError, parseStructuredJson };
 export type {
   GeminiErrorCode,
   GeminiGenerationMetadata,
+  GeminiModelFailure,
   GeminiModel,
 };
 
@@ -167,12 +168,16 @@ function metadata(
   attemptedModels: readonly GeminiModel[],
   selectedModel: GeminiModel | null,
   finalProviderFailure: GeminiGenerationMetadata["finalProviderFailure"],
+  modelFailures: readonly GeminiModelFailure[] = [],
 ): GeminiGenerationMetadata {
   return {
     selectedModel,
     attemptedModels: [...attemptedModels],
     fallbackUsed: attemptedModels.length > 1,
     finalProviderFailure,
+    ...(modelFailures.length === 0
+      ? {}
+      : { modelFailures: modelFailures.map((failure) => ({ ...failure })) }),
   };
 }
 
@@ -185,12 +190,11 @@ function errorMetadata(
   error: GeminiError,
   attemptedModels: readonly GeminiModel[],
 ): GeminiGenerationMetadata {
+  const httpStatus = error.metadata?.finalProviderFailure?.httpStatus;
   return metadata(attemptedModels, null, {
     code: error.code,
     category: failureCategory(error),
-    ...(error.metadata?.finalProviderFailure?.httpStatus === undefined
-      ? {}
-      : { httpStatus: error.metadata.finalProviderFailure.httpStatus }),
+    ...(httpStatus === undefined ? {} : { httpStatus }),
   });
 }
 
@@ -234,6 +238,8 @@ export async function generateStructuredJsonWithMetadata<T>(
     });
 
   const attemptedModels: GeminiModel[] = [];
+  const modelFailures: GeminiModelFailure[] = [];
+  let lastFailure: GeminiError | undefined;
   for (const model of GEMINI_MODELS) {
     attemptedModels.push(model);
     let response: GeminiResponse;
@@ -263,67 +269,82 @@ export async function generateStructuredJsonWithMetadata<T>(
             )
           : geminiRequestFailure(error, timeoutMs, model, attemptedModels);
       const category = failureCategory(requestFailure);
-      const transient = classifyGeminiProviderFailure(error).transient ||
-        ["TIMEOUT", "NETWORK", "RATE_LIMITED", "PROVIDER_UNAVAILABLE"].includes(
-          category,
-        );
-
-      if (!transient) throw requestFailure;
-      if (category === "RATE_LIMITED") {
+      const providerFailure = requestFailure.metadata?.finalProviderFailure;
+      modelFailures.push({
+        model,
+        code: requestFailure.code,
+        category,
+        ...(providerFailure?.httpStatus === undefined
+          ? {}
+          : { httpStatus: providerFailure.httpStatus }),
+      });
+      lastFailure = requestFailure;
+      if (category === "PROJECT_QUOTA_EXHAUSTED") {
         throw new GeminiError(
           "GEMINI_AI_UNAVAILABLE",
-          "Gemini quota or rate limits prevent another model request.",
+          "Gemini project-wide quota exhaustion prevents further model requests.",
           undefined,
-          metadata(attemptedModels, null, {
-            code: requestFailure.code,
-            category,
-            ...(requestFailure.metadata?.finalProviderFailure?.httpStatus ===
-            undefined
-              ? {}
-              : {
-                  httpStatus:
-                    requestFailure.metadata.finalProviderFailure.httpStatus,
-                }),
-          }),
+          metadata(
+            attemptedModels,
+            null,
+            {
+              code: requestFailure.code,
+              category,
+              ...(providerFailure?.httpStatus === undefined
+                ? {}
+                : { httpStatus: providerFailure.httpStatus }),
+            },
+            modelFailures,
+          ),
         );
       }
       if (attemptedModels.length < GEMINI_MODELS.length) continue;
-
-      const finalFailure =
-        requestFailure.metadata?.finalProviderFailure ?? {
-          code: requestFailure.code,
-          category,
-        };
-      throw new GeminiError(
-        "GEMINI_AI_UNAVAILABLE",
-        "Gemini is temporarily unavailable across the configured models.",
-        undefined,
-        metadata(attemptedModels, null, finalFailure),
-      );
+      break;
     }
 
     try {
       const value = parseStructuredJson(response.text ?? "", options.schema);
       return {
         value,
-        metadata: metadata(attemptedModels, model, null),
+        metadata: metadata(attemptedModels, model, null, modelFailures),
       };
     } catch (error) {
       if (!(error instanceof GeminiError)) throw error;
-      throw new GeminiError(
-        error.code,
-        error.message,
-        error.validationIssues,
-        errorMetadata(error, attemptedModels),
-      );
+      lastFailure = error;
+      modelFailures.push({
+        model,
+        code: error.code,
+        category: "PERMANENT",
+      });
+      if (attemptedModels.length < GEMINI_MODELS.length) continue;
     }
   }
 
+  if (lastFailure === undefined) {
+    throw new GeminiError(
+      "GEMINI_AI_UNAVAILABLE",
+      "Gemini is unavailable across the configured models.",
+      undefined,
+      metadata(attemptedModels, null, null, modelFailures),
+    );
+  }
+  const finalProviderFailure =
+    lastFailure.metadata?.finalProviderFailure ?? {
+      code: lastFailure.code,
+      category: "PERMANENT" as const,
+    };
+  const invalidStructuredOutput = [
+    "GEMINI_INVALID_JSON",
+    "GEMINI_EMPTY_RESPONSE",
+    "GEMINI_SCHEMA_VALIDATION_FAILED",
+  ].includes(lastFailure.code);
   throw new GeminiError(
-    "GEMINI_AI_UNAVAILABLE",
-    "Gemini is temporarily unavailable across the configured models.",
-    undefined,
-    metadata(attemptedModels, null, null),
+    invalidStructuredOutput ? lastFailure.code : "GEMINI_AI_UNAVAILABLE",
+    invalidStructuredOutput
+      ? "Gemini returned no usable structured response across the configured models."
+      : "Gemini is unavailable across the configured models.",
+    lastFailure.validationIssues,
+    metadata(attemptedModels, null, finalProviderFailure, modelFailures),
   );
 }
 
