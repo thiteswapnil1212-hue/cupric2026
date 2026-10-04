@@ -129,7 +129,7 @@ function typeLabel(type: ResourceType): string {
 }
 
 function timeLabel(value: string): string {
-  return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value));
 }
 
 const agentPurposes: Record<AgentType, string> = {
@@ -155,7 +155,11 @@ function actionForPlan(state: EmergencyState, plan: ResponsePlan | null): Dashbo
     .map((action) => ({ ...action, sequenceLabel: String(action.sequence).padStart(2, "0") }));
 }
 
-function toTimeline(changes: readonly StateChange[]): DashboardTimelineItem[] {
+function toTimeline(
+  changes: readonly StateChange[],
+  resources: EmergencyState["resources"],
+): DashboardTimelineItem[] {
+  const resourceNames = new Map(resources.map((resource) => [resource.id, resource.name]));
   return [...new Map(changes.map((change) => [change.id, change])).values()]
     .map((change, insertionOrder) => ({ change, insertionOrder }))
     .sort((left, right) =>
@@ -165,8 +169,11 @@ function toTimeline(changes: readonly StateChange[]): DashboardTimelineItem[] {
     .map((change) => ({
       id: change.change.id,
       timeLabel: timeLabel(change.change.occurredAt),
-      title: change.change.description,
-      detail: `${change.change.entityType} ${change.change.entityId}`,
+      title: resources.reduce(
+        (description, resource) => description.replaceAll(resource.id, resource.name),
+        change.change.description,
+      ),
+      detail: `${change.change.entityType} ${resourceNames.get(change.change.entityId) ?? change.change.entityId}`,
       tone: change.change.changeType === "STATUS_CHANGED" ? "red" : change.change.entityType === "PLAN" ? "green" : "gray",
     }));
 }
@@ -254,7 +261,7 @@ export function createDashboardViewModel(
         affectedPlan: !idle && hasWorkflowResult,
       };
     }),
-    timeline: toTimeline(stateChanges),
+    timeline: toTimeline(stateChanges, state.resources),
     reassessment: {
       required: changedRoute !== undefined,
       routeId: changedRoute?.id ?? null,
