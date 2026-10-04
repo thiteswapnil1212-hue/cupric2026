@@ -96,7 +96,7 @@ const initialState: EmergencyState = {
       id: "FAC-HOSP-B",
       name: "Hospital B",
       type: "HOSPITAL",
-      status: "LIMITED",
+      status: "OPERATIONAL",
       location: { latitude: 18.505, longitude: 73.847, address: "South medical district" },
       totalCapacity: 10,
       availableCapacity: 10,
