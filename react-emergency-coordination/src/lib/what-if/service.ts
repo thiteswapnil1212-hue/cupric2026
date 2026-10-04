@@ -16,6 +16,7 @@ import {
 } from "../agents/auto-ai-workflow";
 import { validatePlan } from "../emergency-engine/plan-validator";
 import { getDemoState } from "../demo/fixtures";
+import { getServerDemoSnapshot } from "../demo/server-session";
 import { WhatIfSimulationResultSchema } from "./schema";
 
 export class WhatIfSimulationError extends Error {
@@ -48,7 +49,7 @@ async function loadServerOwnedWhatIfState(
 ): Promise<EmergencyState> {
   const demoState = getDemoState("initial").state;
   if (incidentId === demoState.incident.id) {
-    return { ...demoState, activePlan: null };
+    return (await getServerDemoSnapshot()).state;
   }
   return loadEmergencyState(incidentId);
 }
