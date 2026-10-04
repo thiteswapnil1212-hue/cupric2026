@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { EmergencyStateSchema } from "../../../../domain/emergency-state/schema";
 import { WhatIfScenarioSchema } from "../../../../domain/what-if/schema";
 import {
   runWhatIfSimulation,
@@ -11,7 +10,6 @@ const requestSchema = z
   .object({
     incidentId: z.string().trim().min(1).max(100),
     scenario: WhatIfScenarioSchema,
-    baselineState: EmergencyStateSchema.optional(),
   })
   .strict();
 
@@ -116,7 +114,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     const result = await runWhatIfSimulation(
       parsed.data.incidentId,
       parsed.data.scenario,
-      { baselineState: parsed.data.baselineState },
     );
     return NextResponse.json(result, {
       headers: { "Cache-Control": "no-store" },
