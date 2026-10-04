@@ -1,11 +1,15 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, AlertTriangle, Bell, Check, CircleDot, Clock3, Crosshair,
   Hospital, MapPin, Route, Users, X,
 } from "lucide-react";
-import { WHAT_IF_SCENARIOS, type WhatIfScenario } from "../domain/what-if/schema";
+import {
+  createRouteBlockedScenario,
+  WHAT_IF_SCENARIOS,
+  type WhatIfScenario,
+} from "../domain/what-if/schema";
 import {
   createDashboardViewModel,
   responsePlanSourceLabel,
@@ -17,9 +21,12 @@ import {
   type DashboardViewModel,
   type StatusTone,
 } from "../components/react/data/view-model";
-import { createDemoController } from "../lib/demo/controller";
-import { autoAiDemoAgents } from "../lib/demo/auto-ai-client";
-import type { DemoOperationResult, DemoSnapshot } from "../lib/demo/schema";
+import { createInitialDemoSnapshot } from "../lib/demo/controller";
+import {
+  parseDemoOperationResult,
+  parseDemoSnapshot,
+  type DemoSnapshot,
+} from "../lib/demo/schema";
 import {
   WhatIfSimulationResultSchema,
   type WhatIfSimulationResult,
@@ -148,6 +155,13 @@ function mapRouteClass(
 
 type WhatIfStatus = "IDLE" | "SIMULATING" | "COMPLETE" | "ERROR";
 type PlanActivityKind = "GENERATING" | "REASSESSING";
+type DemoOperation =
+  | { operation: "START" }
+  | { operation: "RESET" }
+  | { operation: "APPROVE" }
+  | { operation: "EXECUTE" }
+  | { operation: "BLOCK_R1" }
+  | { operation: "REJECT"; reason: string };
 
 function PlanningActivity({
   variant,
@@ -258,6 +272,7 @@ function dependencyNames(
 }
 
 function WhatIfPanel({
+  scenarios,
   selectedScenario,
   status,
   result,
@@ -269,6 +284,7 @@ function WhatIfPanel({
   onClose,
   onRetry,
 }: {
+  scenarios: readonly WhatIfScenario[];
   selectedScenario: WhatIfScenario | null;
   status: WhatIfStatus;
   result: WhatIfSimulationResult | null;
@@ -305,7 +321,7 @@ function WhatIfPanel({
       </div>
 
       <div className="what-if-scenarios" role="group" aria-label="Choose a hypothetical scenario">
-        {WHAT_IF_SCENARIOS.map((scenario) => (
+        {scenarios.map((scenario) => (
           <button
             className={`what-if-scenario${selectedScenario?.id === scenario.id ? " what-if-scenario-selected" : ""}`}
             key={scenario.id}
@@ -445,7 +461,7 @@ function ExplainabilityPanel({ model, snapshot }: { model: DashboardViewModel; s
   </section>;
 }
 
-function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onApprove, onReject, onExecute, onBlock, onReset, whatIfSelectedScenario, whatIfStatus, whatIfResult, whatIfHistory, whatIfError, onWhatIfSelect, onWhatIfRun, onWhatIfClose, onWhatIfRetry }: {
+function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onApprove, onReject, onExecute, onBlock, onReset, demoError, whatIfSelectedScenario, whatIfScenarios, whatIfStatus, whatIfResult, whatIfHistory, whatIfError, onWhatIfSelect, onWhatIfRun, onWhatIfClose, onWhatIfRetry }: {
   model: DashboardViewModel;
   snapshot: DemoSnapshot;
   busy: boolean;
@@ -456,7 +472,9 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
   onExecute: () => void;
   onBlock: () => void;
   onReset: () => void;
+  demoError: string | null;
   whatIfSelectedScenario: WhatIfScenario | null;
+  whatIfScenarios: readonly WhatIfScenario[];
   whatIfStatus: WhatIfStatus;
   whatIfResult: WhatIfSimulationResult | null;
   whatIfHistory: readonly WhatIfSimulationResult[];
@@ -566,8 +584,10 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
       <main className="dashboard" id="overview">
         <div className="page-header"><div><p className="eyebrow">OPERATIONS OVERVIEW</p><h1>Emergency coordination</h1></div><div className="header-actions"><span className="live-indicator" role="status" aria-live="polite"><StatusDot />{snapshot.progress.label}</span>        <div className="demo-switch">{snapshot.stage === "IDLE" ? <button className="demo-active" onClick={onStart} disabled={busy}>Start demo</button> : <button onClick={onReset} disabled={busy}>Reset demo</button>}{snapshot.stage === "COMPLETED" && snapshot.currentPlan?.id === "PLAN-001" && <button onClick={onBlock} disabled={busy}>Simulate R1 blockage</button>}</div></div></div>
         <section className="summary-strip" aria-label="Emergency summary"><div className="summary-cell summary-incident"><span className="summary-label">Incident</span><strong>{model.incident.title}</strong><small>{model.incident.location.address}</small></div><div className="summary-cell"><span className="summary-label">Status</span><strong className="value-critical"><StatusDot tone="red" />{model.incident.status} emergency</strong></div><div className="summary-cell"><span className="summary-label">Severity</span><strong className="value-critical">{model.incident.severity}</strong><small>Immediate response</small></div><div className="summary-cell"><span className="summary-label">Affected</span><strong>{model.incident.affectedPopulation} people</strong><small>Current incident estimate</small></div><div className="summary-cell"><span className="summary-label">State version</span><strong>v{model.stateVersion}</strong><small>Updated {formatTime(model.updatedAt)}</small></div></section>
+        {demoError && <div className="operational-failure" role="alert"><strong>DEMO SESSION ERROR</strong><span>{demoError}</span></div>}
         {snapshot.error && <div className="operational-failure" role="alert"><strong>{snapshot.error.code}</strong><span>{snapshot.error.message}</span><small>Stage: {snapshot.error.stage} · Reset required</small></div>}
         <WhatIfPanel
+          scenarios={whatIfScenarios}
           selectedScenario={whatIfSelectedScenario}
           status={whatIfStatus}
           result={whatIfResult}
@@ -699,9 +719,9 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
 }
 
 export default function Home() {
- const [controller] = useState(() => createDemoController(autoAiDemoAgents));
- const [snapshot, setSnapshot] = useState<DemoSnapshot>(() => controller.getSnapshot());
- const [busy, setBusy] = useState(false);
+ const [snapshot, setSnapshot] = useState<DemoSnapshot>(() => createInitialDemoSnapshot());
+ const [busy, setBusy] = useState(true);
+ const [demoError, setDemoError] = useState<string | null>(null);
  const [pendingWorkflowKind, setPendingWorkflowKind] = useState<PlanActivityKind | null>(null);
  const [whatIfSelectedScenario, setWhatIfSelectedScenario] = useState<WhatIfScenario | null>(null);
  const [whatIfStatus, setWhatIfStatus] = useState<WhatIfStatus>("IDLE");
@@ -711,26 +731,64 @@ export default function Home() {
  const whatIfRequestRef = useRef(0);
  const [dashboardEpoch, setDashboardEpoch] = useState(0);
  const model = useMemo(() => createDashboardViewModel(snapshot), [snapshot]);
- async function run(operation: () => Promise<DemoOperationResult> | DemoOperationResult, activityKind: PlanActivityKind | null = null): Promise<boolean> {
+ const whatIfScenarios = useMemo(
+   () => [
+     ...snapshot.state.routes.map((route) => createRouteBlockedScenario(route.id)),
+     ...WHAT_IF_SCENARIOS.filter((scenario) => scenario.type !== "ROUTE_BLOCKED"),
+   ],
+   [snapshot.state.routes],
+ );
+ useEffect(() => {
+   let active = true;
+   void fetch("/api/demo/session", { cache: "no-store" })
+     .then(async (response) => {
+       if (!response.ok) throw new Error("Could not load the current demo session.");
+       const body: unknown = await response.json();
+       const parsed = typeof body === "object" && body !== null && "snapshot" in body
+         ? parseDemoSnapshot(body.snapshot)
+         : null;
+       if (parsed === null) throw new Error("The demo session returned invalid state.");
+       if (active) setSnapshot(parsed);
+     })
+     .catch((error: unknown) => {
+       if (active) setDemoError(error instanceof Error ? error.message : "Could not load the current demo session.");
+     })
+     .finally(() => {
+       if (active) setBusy(false);
+     });
+   return () => { active = false; };
+ }, []);
+ async function run(operation: DemoOperation, activityKind: PlanActivityKind | null = null): Promise<boolean> {
    setBusy(true);
    setPendingWorkflowKind(activityKind);
+   setDemoError(null);
    try {
-     const result = await operation();
+     const response = await fetch("/api/demo/session", {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify(operation),
+     });
+     const body: unknown = await response.json();
+     const result = parseDemoOperationResult(body);
+     if (!response.ok || result === null) {
+       const message =
+         typeof body === "object" &&
+         body !== null &&
+         "message" in body &&
+         typeof body.message === "string"
+           ? body.message
+           : "The demo operation failed safely.";
+       throw new Error(message);
+     }
      setSnapshot(result.snapshot);
      return result.success;
    } catch (error) {
-     setSnapshot(controller.captureUnexpectedFailure(error).snapshot);
+     setDemoError(error instanceof Error ? error.message : "The demo operation failed safely.");
      return false;
    } finally {
      setBusy(false);
      setPendingWorkflowKind(null);
    }
- }
- async function execute() {
-   const started = await run(() => controller.beginExecution());
-   if (!started) return;
-   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-   await run(() => controller.completeExecution());
  }
  function selectWhatIfScenario(scenario: WhatIfScenario) {
    setWhatIfSelectedScenario(scenario);
@@ -750,12 +808,11 @@ export default function Home() {
  }
  function resetDemo() {
    clearDemoUiState();
-   setSnapshot(controller.resetDemo().snapshot);
-   setBusy(false);
+   void run({ operation: "RESET" });
  }
  function startDemo() {
    clearDemoUiState();
-   void run(() => controller.startDemo(), "GENERATING");
+   void run({ operation: "START" }, "GENERATING");
  }
  async function runWhatIf() {
    if (whatIfSelectedScenario === null || whatIfStatus === "SIMULATING") return;
@@ -770,7 +827,6 @@ export default function Home() {
        body: JSON.stringify({
          incidentId: model.incident.id,
          scenario: whatIfSelectedScenario,
-         baselineState: snapshot.state,
        }),
      });
      const body = await response.json() as unknown;
@@ -814,12 +870,14 @@ export default function Home() {
    busy={busy}
    pendingWorkflowKind={pendingWorkflowKind}
    onStart={startDemo}
-   onApprove={() => void run(() => controller.approveCurrentPlan())}
-   onReject={(reason) => void run(() => controller.rejectCurrentPlan(reason || "Coordinator rejected the deterministic demo plan."))}
-   onExecute={() => void execute()}
-   onBlock={() => void run(() => controller.simulateRouteBlockage(), "REASSESSING")}
+   onApprove={() => void run({ operation: "APPROVE" })}
+   onReject={(reason) => void run({ operation: "REJECT", reason: reason || "Coordinator rejected the deterministic demo plan." })}
+   onExecute={() => void run({ operation: "EXECUTE" })}
+   onBlock={() => void run({ operation: "BLOCK_R1" }, "REASSESSING")}
    onReset={resetDemo}
+   demoError={demoError}
    whatIfSelectedScenario={whatIfSelectedScenario}
+   whatIfScenarios={whatIfScenarios}
    whatIfStatus={whatIfStatus}
    whatIfResult={whatIfResult}
    whatIfHistory={whatIfHistory}
