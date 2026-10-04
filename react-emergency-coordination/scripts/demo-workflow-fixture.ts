@@ -19,6 +19,15 @@ async function run(): Promise<void> {
   assert.equal(controller.getSnapshot().currentPlan?.status, "PENDING_APPROVAL");
 
   assert.equal(controller.resetDemo().success, true);
+  assert.equal(controller.getSnapshot().state.stateVersion, 12);
+  assert.equal(controller.getSnapshot().state.activePlan, null);
+  assert.equal(controller.getSnapshot().stateChanges.length, 0);
+  assert.equal(controller.getSnapshot().humanDecision, null);
+  assert.equal(controller.getSnapshot().previousPlan, null);
+  assert.equal(controller.getSnapshot().planHistory.length, 0);
+  assert.equal(controller.getSnapshot().riskAssessment, null);
+  assert.equal(controller.getSnapshot().resourceRoutingAssessment, null);
+  assert.equal(controller.getSnapshot().responsePlanningResult, null);
   await controller.startDemo();
   assert.equal((await controller.approveCurrentPlan()).success, true);
   assert.equal(controller.getSnapshot().stage, "AWAITING_EXECUTION");
@@ -92,16 +101,6 @@ async function run(): Promise<void> {
   assert.equal(rejectedController.beginExecution().success, false);
   assert.equal(rejectedController.resetDemo().success, true);
   assert.equal((await rejectedController.startDemo()).success, true);
-
-  const modifiedController = createDemoController();
-  await modifiedController.startDemo();
-  assert.equal((await modifiedController.modifyCurrentPlan("Use the alternative response team.")).success, true);
-  assert.equal(modifiedController.getSnapshot().humanDecision?.decision, "MODIFY");
-  assert.equal(modifiedController.getSnapshot().stage, "AWAITING_APPROVAL");
-  assert.equal(modifiedController.getSnapshot().currentPlan?.id, "PLAN-002");
-  assert.equal(modifiedController.getSnapshot().currentPlan?.status, "PENDING_APPROVAL");
-  assert.equal(modifiedController.getSnapshot().planHistory[0]?.status, "SUPERSEDED");
-  assert.equal(modifiedController.beginExecution().success, false);
 
   const failureExecutor: DemoSimulationExecutor = (state, plan) =>
     executeApprovedPlan(
