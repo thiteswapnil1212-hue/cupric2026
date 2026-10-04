@@ -19,7 +19,7 @@ async function main() {
   ]);
   assert.ok(idleView.agents.every((agent) =>
     agent.timeLabel === "Not started" &&
-    agent.durationLabel === "—" &&
+    !("durationLabel" in agent) &&
     agent.resultSummary === "Awaiting demo start",
   ));
   assert.equal(idleView.timeline.length, 0);
