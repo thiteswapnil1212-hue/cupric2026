@@ -16,11 +16,11 @@ import {
   type DashboardAgent,
   type DashboardFacility,
   type DashboardResource,
-  type DashboardRoute,
   type DashboardTimelineItem,
   type DashboardViewModel,
   type StatusTone,
 } from "../components/react/data/view-model";
+import OperationalMap from "../components/react/operational-map";
 import { createInitialDemoSnapshot } from "../lib/demo/controller";
 import {
   parseDemoOperationResult,
@@ -142,28 +142,6 @@ function PlanHistory({
       </li>;
     })}</ol>
   </details>;
-}
-
-function mapRouteClass(
-  route: DashboardRoute,
-  plan: DashboardViewModel["activePlan"],
-  previousPlan: DashboardViewModel["previousPlan"],
-  hypotheticalPlan?: DashboardViewModel["activePlan"],
-): string {
-  const routeIsInActivePlan = plan?.dependencies.routeIds.includes(route.id) ?? false;
-  const routeAffectsPreviousPlan =
-    route.status !== "OPEN" &&
-    (previousPlan?.dependencies.routeIds.includes(route.id) ?? false);
-  const statusClass = route.status === "OPEN" ? "route-active" : "route-blocked";
-  return [
-    statusClass,
-    routeIsInActivePlan && route.status === "OPEN" ? "route-in-use" : "",
-    routeAffectsPreviousPlan ? "route-affected" : "",
-    hypotheticalPlan?.dependencies.routeIds.includes(route.id) &&
-    !plan?.dependencies.routeIds.includes(route.id)
-      ? "route-what-if-alternative"
-      : "",
-  ].filter(Boolean).join(" ");
 }
 
 type WhatIfStatus = "IDLE" | "SIMULATING" | "COMPLETE" | "ERROR";
@@ -529,13 +507,10 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
     whatIfStatus === "COMPLETE"
       ? whatIfResult?.workflowResult.responsePlanningResult.plan ?? null
       : null;
-  const mapModel =
-    whatIfStatus === "COMPLETE" && whatIfResult !== null
-      ? createDashboardViewModel({
-          ...snapshot,
-          state: whatIfResult.hypotheticalState,
-        })
-      : model;
+  const mapState =
+    whatIfPlan !== null && whatIfResult !== null
+      ? whatIfResult.hypotheticalState
+      : snapshot.state;
   const planSource = plan?.source ?? "UNKNOWN";
   const planSourceLabel = responsePlanSourceLabel(planSource);
   const planSourceSummary =
@@ -631,19 +606,23 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
         />
         {showDependencyNotice && <div className="reassessment-alert" role="status"><div className="alert-icon"><AlertTriangle size={17} /></div><div className="alert-copy"><strong>Plan reassessment required</strong><span>{model.reassessment.routeId} is blocked and affects the active response plan.</span></div><div className="alert-detail"><span>Affected dependency</span><strong>{model.reassessment.routeId}</strong></div><div className="alert-detail"><span>Revised plan</span><strong>{model.reassessment.revisedPlanId}</strong></div></div>}
         <div className="primary-grid">
-          <section className={`panel map-panel${mapModel.reassessment.required ? " map-reassessment" : ""}${whatIfPlan ? " map-what-if" : ""}`} id="map">
-            <PanelHeading eyebrow={whatIfPlan ? "WHAT-IF SIMULATION · PRESENTATION OVERLAY" : "SITUATIONAL AWARENESS"} title={whatIfPlan ? "Hypothetical operational map" : "Operational map"} />
-            <div className="map-canvas" role="img" aria-label={`${whatIfPlan ? "What-If simulated overlay. " : ""}Schematic, not-to-scale incident map. ${mapModel.routes.map((route) => `${route.id} ${route.statusLabel}`).join(", ")}. ${mapModel.resources.slice(0, 2).map((resource) => resource.name).join(", ")}. ${mapModel.facilities.map((facility) => facility.name).join(", ")}.`}>
-              <div className="map-grid-lines" /><div className="map-road road-a" /><div className="map-road road-b" /><div className="map-road road-c" />
-              {mapModel.routes.map((route, index) => <div className={`map-route ${mapRouteClass(route, mapModel.activePlan, mapModel.previousPlan, whatIfPlan)} map-route-${index}`} key={route.id}><span>{route.id}{route.status !== "OPEN" ? ` · ${route.status}` : ""}</span></div>)}
-              <div className={`map-marker marker-incident${mapModel.incident.status === "ACTIVE" ? " marker-incident-active" : ""}`}><AlertTriangle size={12} /><span>Incident</span></div>
-              {mapModel.resources.slice(0, 2).map((resource, index) => <div className={`map-marker marker-resource-${index}`} data-resource-status={resource.status} key={resource.id}><Users size={12} /><span>{resource.name}</span></div>)}
-              {mapModel.facilities.map((facility, index) => <div className={`map-marker marker-facility-${index}`} data-facility-status={facility.status} key={facility.id}><Hospital size={12} /><span>{facility.name}</span></div>)}
-              <div className="map-legend"><span><i className="legend-line active-line" />Open route</span><span><i className="legend-line blocked-line" />Blocked route</span>{whatIfPlan && <span><i className="legend-line what-if-line" />What-If plan route</span>}</div>
-              <div className="map-scale">500 m · schematic</div>
+          <section className={`panel map-panel${model.reassessment.required ? " map-reassessment" : ""}${whatIfPlan ? " map-what-if" : ""}`} id="map">
+            <PanelHeading eyebrow={whatIfPlan ? "WHAT-IF SIMULATION · PUNE" : "DEMO · PUNE"} title="Operational map" />
+            <OperationalMap
+              state={mapState}
+              activePlan={whatIfPlan ?? snapshot.currentPlan}
+              previousPlan={snapshot.previousPlan}
+              reassessing={snapshot.stage === "REASSESSING" || snapshot.stage === "SITUATION_CHANGED" || snapshot.stage === "CHANGE_DETECTED"}
+              whatIf={whatIfPlan && whatIfResult
+                ? { realState: snapshot.state, realPlan: snapshot.currentPlan }
+                : null}
+            />
+            <div className="map-footer">
+              <span><StatusDot tone="red" />{mapState.routes.filter((route) => route.status === "BLOCKED" || route.status === "CLOSED").length} blocked routes</span>
+              <span><StatusDot />{mapState.resources.filter((resource) => resource.status !== "UNAVAILABLE" && resource.status !== "OUT_OF_SERVICE").length} resources active</span>
+              <span><StatusDot tone="blue" />{mapState.facilities.filter((facility) => facility.status === "OPERATIONAL" || facility.status === "LIMITED").length} facilities available</span>
+              <span className="map-data-note">Simulated incident data · Pune</span>
             </div>
-            {whatIfPlan && <div className="map-what-if-label">WHAT-IF SIMULATION · NOT THE ACTIVE EMERGENCY MAP</div>}
-            <div className="map-footer"><span><StatusDot tone="red" />{mapModel.routes.filter((route) => route.status !== "OPEN").length} blocked routes</span><span><StatusDot />{mapModel.resources.filter((resource) => resource.status !== "UNAVAILABLE" && resource.status !== "OUT_OF_SERVICE").length} resources active</span><span><StatusDot tone="blue" />{mapModel.facilities.filter((facility) => facility.status === "OPERATIONAL" || facility.status === "LIMITED").length} facilities available</span></div>
           </section>
           <section className={`panel plan-panel${approvalAvailable ? " plan-awaiting-approval" : executionAvailable ? " plan-ready-to-execute" : snapshot.stage.startsWith("EXECUTING") ? " plan-executing" : ""}`} id="plans">
             <PanelHeading eyebrow={isApproved || isCompleted ? "ACTIVE RESPONSE PLAN" : "RESPONSE PLAN"} title={plan?.id ?? "NO ACTIVE RESPONSE PLAN"} />
