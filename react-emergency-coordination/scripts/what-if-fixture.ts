@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import type { EmergencyState } from "../src/domain/emergency-state/schema";
 import {
+  createRouteBlockedScenario,
   WHAT_IF_SCENARIOS,
+  WhatIfScenarioSchema,
   type WhatIfScenario,
 } from "../src/domain/what-if/schema";
 import type { WhatIfSimulationResult } from "../src/lib/what-if/schema";
@@ -227,6 +229,17 @@ async function main() {
     WHAT_IF_SCENARIOS.map((scenario) => [scenario.type, scenario]),
   ) as Record<WhatIfScenario["type"], WhatIfScenario>;
 
+  const routeR2Scenario = createRouteBlockedScenario("R2");
+  assert.equal(routeR2Scenario.label, "Route R2 becomes blocked");
+  assert.equal(WhatIfScenarioSchema.safeParse(routeR2Scenario).success, true);
+  assert.equal(
+    WhatIfScenarioSchema.safeParse({
+      ...routeR2Scenario,
+      label: "Route R1 becomes blocked",
+    }).success,
+    false,
+  );
+
   const routeResult = await runScenario(scenarios.ROUTE_BLOCKED);
   const activePlanBaseline = await runWhatIfSimulation(
     original.incident.id,
@@ -435,6 +448,7 @@ async function main() {
       body: JSON.stringify({
         incidentId: original.incident.id,
         scenario: scenarios.ROUTE_BLOCKED,
+        baselineState: original,
         state: original,
         apiKey: "not-accepted",
         model: "client-selected-model",
