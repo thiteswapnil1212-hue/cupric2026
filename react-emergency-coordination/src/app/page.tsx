@@ -53,7 +53,20 @@ function formatTime(value: string): string {
 }
 
 function resourceRows(resources: DashboardResource[]) {
-  return resources.map((resource) => <div className="table-row" key={resource.id}><span className="resource-name">{resource.name}</span><span>{resource.typeLabel}</span><span><span className={`status-badge badge-${resource.tone}`}><StatusDot tone={resource.tone} />{resource.statusLabel}</span></span><span>{resource.assignment}</span><span>{resource.location}</span></div>);
+  return resources.map((resource) => (
+    <div className="table-row" key={resource.id}>
+      <span className="resource-name">{resource.name}</span>
+      <span>{resource.typeLabel}</span>
+      <span>
+        <span className={`status-badge badge-${resource.tone}`}>
+          <StatusDot tone={resource.tone} />
+          {resource.statusLabel}
+        </span>
+      </span>
+      <span>{resource.assignment}</span>
+      <span>{resource.location}</span>
+    </div>
+  ));
 }
 
 function facilityRows(facilities: DashboardFacility[]) {
@@ -93,7 +106,7 @@ function agentRows(agents: DashboardAgent[]) {
       <div>
         <strong>{agent.label}</strong>
         <span>{agent.purpose}</span>
-        <span>{agent.statusLabel} · {agent.timeLabel} · {agent.durationLabel}</span>
+        <span>{agent.statusLabel} · {agent.timeLabel}</span>
         <span>{agent.resultSummary}</span>
       </div>
       <span className={`agent-state ${agent.tone === "amber" ? "state-review" : ""} ${agent.status === "STANDBY" ? "state-standby" : ""}`}>{agent.statusLabel}</span>
@@ -236,7 +249,7 @@ function PlanningActivity({
           </ol>
           {(showReadyBanner || validation === false) && <div className={`planning-ready${complete ? " planning-ready-complete" : " planning-ready-incomplete"}`} role="status">
             <strong>{complete ? whatIf ? "HYPOTHETICAL PLAN READY" : "RESPONSE PLAN READY" : "VALIDATION DID NOT PASS"}</strong>
-            <span>{whatIf ? "Simulated only · cannot be approved or executed" : complete ? "AI-generated recommendation · awaiting human coordinator review" : "Review the workflow result before taking action"}</span>
+            <span>{whatIf ? "Simulated only · cannot be approved or executed" : complete ? "Recommendation available · awaiting human coordinator review" : "Review the workflow result before taking action"}</span>
           </div>}
         </>
       )}
@@ -269,6 +282,24 @@ function dependencyNames(
       return state.routes.find((item) => item.id === id)?.id ?? id;
     })
     .join(", ");
+}
+
+function whatIfChangeLabel(
+  state: WhatIfSimulationResult["hypotheticalState"],
+  change: WhatIfSimulationResult["changes"][number],
+): string {
+  switch (change.entityType) {
+    case "INCIDENT":
+      return "Affected population";
+    case "RESOURCE":
+      return state.resources.find((item) => item.id === change.entityId)?.name ?? "Response resource";
+    case "FACILITY":
+      return state.facilities.find((item) => item.id === change.entityId)?.name ?? "Care facility";
+    case "ROUTE": {
+      const route = state.routes.find((item) => item.id === change.entityId);
+      return route === undefined ? "Access route" : `${route.name} (${route.id})`;
+    }
+  }
 }
 
 function WhatIfPanel({
@@ -371,7 +402,7 @@ function WhatIfPanel({
         <div className="what-if-result" aria-live="polite">
           <div className="what-if-result-heading">
             <div>
-              <p className="eyebrow">WHAT-IF RESULT · {result.simulationId}</p>
+              <p className="eyebrow">WHAT-IF RESULT</p>
               <h3>{result.scenario.label}</h3>
             </div>
             <span className="what-if-not-executed">HYPOTHETICAL — NOT EXECUTED</span>
@@ -393,7 +424,7 @@ function WhatIfPanel({
             </article>
             <article className="what-if-plan-card what-if-simulated">
               <span className="what-if-card-label">WHAT-IF / SIMULATED</span>
-              <h4>{hypotheticalPlan.id}</h4>
+              <h4>Hypothetical response plan</h4>
               <p>HYPOTHETICAL · NOT EXECUTED</p>
               <dl>
                 <div><dt>Route</dt><dd>{dependencyNames(result.hypotheticalState, hypotheticalActions, "routeIds")}</dd></div>
@@ -411,13 +442,13 @@ function WhatIfPanel({
               <ul>
                 {result.changes.map((change) => (
                   <li key={`${change.entityType}-${change.entityId}-${change.field}`}>
-                    <span>{change.field.replaceAll(/([A-Z])/g, " $1")} · {change.entityId}</span>
+                    <span>{change.field.replaceAll(/([A-Z])/g, " $1")} · {whatIfChangeLabel(result.hypotheticalState, change)}</span>
                     <strong>{change.previousValue} → {change.hypotheticalValue}</strong>
                   </li>
                 ))}
                 <li>
                   <span>Response plan</span>
-                  <strong>{result.currentPlan?.id ?? "No active plan"} → {hypotheticalPlan.id}</strong>
+                  <strong>{result.currentPlan?.id ?? "No active plan"} → Hypothetical response plan</strong>
                 </li>
               </ul>
             </div>
@@ -431,9 +462,8 @@ function WhatIfPanel({
           <ol>
             {history.map((item) => (
               <li key={item.simulationId}>
-                <strong>{item.simulationId}</strong>
-                <span>{item.scenario.label}</span>
-                <span>{item.workflowResult.responsePlanningResult.plan.id} · {item.workflowResult.responsePlanningResult.validation.valid ? "Valid" : "Invalid"}</span>
+                <strong>{item.scenario.label}</strong>
+                <span>Hypothetical response plan · {item.workflowResult.responsePlanningResult.validation.valid ? "Valid" : "Invalid"}</span>
               </li>
             ))}
           </ol>
@@ -510,7 +540,7 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
   const planSourceLabel = responsePlanSourceLabel(planSource);
   const planSourceSummary =
     planSource === "DETERMINISTIC_FALLBACK"
-      ? "Gemini unavailable; plan generated using deterministic emergency constraints."
+      ? "AI service unavailable — using built-in emergency rules."
       : planSource === "UNKNOWN"
         ? "Source metadata unavailable; this plan is not represented as AI-generated."
         : plan?.summary ?? "";
@@ -580,10 +610,10 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
       <div className="sidebar-footer"><div className="system-health"><StatusDot /><span>All systems operational</span></div><span className="build-label">Environment · Deterministic demo</span></div>
     </aside>
     <div className="main-column">
-      <header className="topbar"><div className="incident-context"><span className="context-label">CURRENT INCIDENT</span><strong>{model.incident.title}</strong><span className="incident-id">{model.incident.id}</span></div><div className="topbar-meta"><div className="topbar-state" data-tone={commandStatusTone} role="status" aria-live="polite"><StatusDot tone={commandStatusTone} /><span>System status</span><strong key={commandStatus}>{commandStatus}</strong></div><div className="topbar-divider" /><div className="topbar-updated">Last updated <strong>{formatTime(model.updatedAt)}</strong></div><div className="user-control"><span className="avatar" aria-hidden="true">JM</span><span className="user-name">Jordan Miller</span></div></div></header>
+      <header className="topbar"><div className="incident-context"><span className="context-label">CURRENT INCIDENT</span><strong>{model.incident.title}</strong></div><div className="topbar-meta"><div className="topbar-state" data-tone={commandStatusTone} role="status" aria-live="polite"><StatusDot tone={commandStatusTone} /><span>System status</span><strong key={commandStatus}>{commandStatus}</strong></div><div className="topbar-divider" /><div className="topbar-updated">Last updated <strong>{formatTime(model.updatedAt)}</strong></div><div className="user-control"><span className="avatar" aria-hidden="true">JM</span><span className="user-name">Jordan Miller</span></div></div></header>
       <main className="dashboard" id="overview">
         <div className="page-header"><div><p className="eyebrow">OPERATIONS OVERVIEW</p><h1>Emergency coordination</h1></div><div className="header-actions"><span className="live-indicator" role="status" aria-live="polite"><StatusDot />{snapshot.progress.label}</span>        <div className="demo-switch">{snapshot.stage === "IDLE" ? <button className="demo-active" onClick={onStart} disabled={busy}>Start demo</button> : <button onClick={onReset} disabled={busy}>Reset demo</button>}{snapshot.stage === "COMPLETED" && snapshot.currentPlan?.id === "PLAN-001" && <button onClick={onBlock} disabled={busy}>Simulate R1 blockage</button>}</div></div></div>
-        <section className="summary-strip" aria-label="Emergency summary"><div className="summary-cell summary-incident"><span className="summary-label">Incident</span><strong>{model.incident.title}</strong><small>{model.incident.location.address}</small></div><div className="summary-cell"><span className="summary-label">Status</span><strong className="value-critical"><StatusDot tone="red" />{model.incident.status} emergency</strong></div><div className="summary-cell"><span className="summary-label">Severity</span><strong className="value-critical">{model.incident.severity}</strong><small>Immediate response</small></div><div className="summary-cell"><span className="summary-label">Affected</span><strong>{model.incident.affectedPopulation} people</strong><small>Current incident estimate</small></div><div className="summary-cell"><span className="summary-label">State version</span><strong>v{model.stateVersion}</strong><small>Updated {formatTime(model.updatedAt)}</small></div></section>
+        <section className="summary-strip" aria-label="Emergency summary"><div className="summary-cell summary-incident"><span className="summary-label">Incident</span><strong>{model.incident.title}</strong><small>{model.incident.location.address}</small></div><div className="summary-cell"><span className="summary-label">Status</span><strong className="value-critical"><StatusDot tone="red" />{model.incident.status} emergency</strong></div><div className="summary-cell"><span className="summary-label">Severity</span><strong className="value-critical">{model.incident.severity}</strong><small>Immediate response</small></div><div className="summary-cell"><span className="summary-label">Affected</span><strong>{model.incident.affectedPopulation} people</strong><small>Current incident estimate</small></div><div className="summary-cell"><span className="summary-label">Current plan</span><strong>{model.activePlan?.id ?? "Not generated"}</strong><small>{model.activePlan?.status.replaceAll("_", " ") ?? "Awaiting demo start"}</small></div></section>
         {demoError && <div className="operational-failure" role="alert"><strong>DEMO SESSION ERROR</strong><span>{demoError}</span></div>}
         {snapshot.error && <div className="operational-failure" role="alert"><strong>{snapshot.error.code}</strong><span>{snapshot.error.message}</span><small>Stage: {snapshot.error.stage} · Reset required</small></div>}
         <WhatIfPanel
@@ -636,11 +666,7 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
             {plan ? (
               <>
                 <div className="plan-meta">
-                  <span>Incident {plan.incidentId}</span>
-                  <span className="meta-separator">•</span>
                   <span>Generated {formatTime(plan.generatedAt)}</span>
-                  <span className="meta-separator">•</span>
-                  <span>State version {plan.stateVersion}</span>
                   <span className="meta-separator">•</span>
                   <span className="plan-route-dependencies" aria-label="Plan route dependencies">
                     <span className="plan-route-label">ROUTE DEPENDENCY</span>
@@ -659,7 +685,7 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
                 <div className={`plan-callout${showDependencyNotice ? " plan-callout-affected" : ""}`}>
                   <div className="callout-icon"><AlertTriangle size={15} /></div>
                   <div>
-                    <strong>{showDependencyNotice ? "Dependency affected" : planSource === "UNKNOWN" ? "Plan source unavailable" : planSource === "DETERMINISTIC_FALLBACK" ? "Deterministic fallback" : "AI recommendation ready"}</strong>
+                    <strong>{showDependencyNotice ? "Dependency affected" : planSource === "UNKNOWN" ? "Plan source unavailable" : planSource === "DETERMINISTIC_FALLBACK" ? "Built-in emergency rules" : "AI recommendation ready"}</strong>
                     <span>{showDependencyNotice ? `${model.reassessment.routeId} is no longer usable. Review the revised plan.` : planSourceSummary}</span>
                   </div>
                 </div>
@@ -713,7 +739,7 @@ function Dashboard({ model, snapshot, busy, pendingWorkflowKind, onStart, onAppr
         <div className="bottom-grid"><section className="panel activity-panel" id="activity"><PanelHeading eyebrow="PROCESSING ACTIVITY" title="Agent activity" />{busy && pendingWorkflowKind ? <div className="agent-pending" role="status" aria-live="polite"><Activity size={15} aria-hidden="true" />{pendingWorkflowKind === "REASSESSING" ? "Reassessing the response after the reported situation change." : "Analyzing emergency state, evaluating resources and routes, and generating a response plan."}</div> : <div className="agent-list">{agentRows(model.agents)}</div>}<div className="ai-note"><CircleDot size={13} />AI analyzes and recommends. Human coordinators authorize execution.</div></section><section className="panel timeline-panel" id="timeline"><PanelHeading eyebrow="AUDIT TRAIL" title="Situation timeline" /><div className="timeline-list" role="log" aria-label="Situation timeline" aria-live="polite" aria-relevant="additions text">{timelineRows(model.timeline, snapshot.stage === "IDLE")}</div></section></div>
         <ExplainabilityPanel model={model} snapshot={snapshot} />
       </main>
-      <footer className="app-footer"><span>REACT Emergency Coordination · Deterministic demo environment</span><span>State version {model.stateVersion} <span className="footer-divider">|</span> {model.incident.id}</span></footer>
+      <footer className="app-footer"><span>REACT Emergency Coordination · Deterministic demo environment</span></footer>
     </div>
   </div>;
 }
