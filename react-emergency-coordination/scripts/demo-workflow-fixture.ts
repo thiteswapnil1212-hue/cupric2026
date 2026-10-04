@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createDemoController, type DemoSimulationExecutor } from "../src/lib/demo/controller";
+import { createDashboardViewModel } from "../src/components/react/data/view-model";
 import { executeApprovedPlan } from "../src/lib/simulation/engine";
 
 async function run(): Promise<void> {
@@ -85,6 +86,20 @@ async function run(): Promise<void> {
   assert.equal(controller.getSnapshot().previousPlan?.id, "PLAN-001");
   assert.equal(controller.getSnapshot().stateChanges.some((change) => change.description.includes("PLAN_AFFECTED_REASSESSMENT_REQUIRED")), true);
   assert.equal(controller.getSnapshot().stateChanges.some((change) => change.description.includes("Reassessment started")), true);
+  const replanningView = createDashboardViewModel(controller.getSnapshot());
+  const reassessmentEvent = replanningView.timeline.find((item) =>
+    item.title.startsWith("Change detected:"),
+  );
+  assert.equal(
+    reassessmentEvent?.title,
+    "Change detected: active plan affected — reassessment started",
+  );
+  assert.equal(
+    replanningView.timeline.some((item) =>
+      item.title.includes("PLAN_AFFECTED_REASSESSMENT_REQUIRED"),
+    ),
+    false,
+  );
   assert.deepEqual(
     controller.getSnapshot().planHistory.map((plan) => [plan.id, plan.status]),
     [["PLAN-001", "COMPLETED"], ["PLAN-002", "PENDING_APPROVAL"]],
@@ -99,6 +114,13 @@ async function run(): Promise<void> {
   assert.equal(controller.getSnapshot().currentPlan?.status, "COMPLETED");
   assert.equal(controller.getSnapshot().state.routes.find((route) => route.id === "R1")?.status, "BLOCKED");
   assert.equal(controller.getSnapshot().state.routes.find((route) => route.id === "R2")?.status, "OPEN");
+  const resourceView = createDashboardViewModel(controller.getSnapshot());
+  const ambulance07 = resourceView.resources.find((resource) => resource.name === "Ambulance 07");
+  const ambulance08 = resourceView.resources.find((resource) => resource.name === "Ambulance 08");
+  assert.equal(ambulance07?.statusLabel, "Superseded");
+  assert.equal(ambulance07?.assignment, "Previous plan: PLAN-001");
+  assert.equal(ambulance08?.statusLabel, "Dispatched");
+  assert.equal(ambulance08?.assignment, "Current plan: PLAN-002");
 
   assert.equal(controller.resetDemo().success, true);
   assert.equal(controller.getSnapshot().stage, "IDLE");
