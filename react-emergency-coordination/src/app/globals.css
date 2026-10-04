@@ -1314,6 +1314,23 @@ body {
   background: #fffaf0;
 }
 
+.agent-pending {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 72px;
+  padding: 14px 18px;
+  color: #4e6858;
+  background: #f6faf7;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent-pending svg {
+  flex: 0 0 auto;
+  color: #568466;
+}
+
 .planning-activity {
   margin: 0 18px 14px;
   padding: 12px;
@@ -2281,8 +2298,29 @@ summary:focus-visible {
   }
 
   .map-marker {
+    box-sizing: border-box;
+    max-width: calc(50% - 12px);
     padding: 4px 5px;
     font-size: 8px;
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .marker-facility-0 {
+    top: 24%;
+  }
+
+  .marker-resource-0 {
+    top: 32%;
+  }
+
+  .marker-resource-1 {
+    top: 40%;
+  }
+
+  .map-route span {
+    top: -16px;
   }
 
   .facility-row {
