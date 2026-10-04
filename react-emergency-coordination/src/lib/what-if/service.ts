@@ -36,7 +36,21 @@ export type WhatIfSimulationDependencies = {
   loadState?: typeof loadEmergencyState;
   workflowDependencies?: AutoAiWorkflowDependencies;
   now?: () => Date;
+  baselineState?: EmergencyState;
 };
+
+function currentActivePlan(state: EmergencyState): EmergencyState["activePlan"] {
+  const plan = state.activePlan;
+  if (
+    plan === null ||
+    (plan.status !== "PENDING_APPROVAL" &&
+      plan.status !== "APPROVED" &&
+      plan.status !== "EXECUTING")
+  ) {
+    return null;
+  }
+  return plan;
+}
 
 async function loadServerOwnedWhatIfState(
   incidentId: string,
@@ -222,7 +236,19 @@ export async function runWhatIfSimulation(
 ): Promise<z.infer<typeof WhatIfSimulationResultSchema>> {
   const loadState =
     dependencies.loadState ?? loadServerOwnedWhatIfState;
-  const currentState = await loadState(incidentId);
+  const demoIncidentId = getDemoState("initial").state.incident.id;
+  if (
+    dependencies.baselineState !== undefined &&
+    incidentId !== demoIncidentId
+  ) {
+    throw new WhatIfSimulationError(
+      "WHAT_IF_STATE_INVALID",
+      "A client baseline is only accepted for the local demo incident.",
+      400,
+    );
+  }
+  const currentState =
+    dependencies.baselineState ?? await loadState(incidentId);
   if (currentState.incident.id !== incidentId) {
     throw new WhatIfSimulationError(
       "WHAT_IF_STATE_INVALID",
@@ -272,6 +298,7 @@ export async function runWhatIfSimulation(
       validation,
     },
   };
+  const activePlan = currentActivePlan(currentState);
   return WhatIfSimulationResultSchema.parse({
     simulationId,
     scenario,
@@ -279,15 +306,15 @@ export async function runWhatIfSimulation(
     stateVersion: currentState.stateVersion,
     currentState,
     hypotheticalState,
-    currentPlan: currentState.activePlan,
+    currentPlan: activePlan,
     currentPlanValidationValid:
-      currentState.activePlan === null
+      activePlan === null
         ? null
-        : validatePlan(currentState.activePlan, currentState).valid,
+        : validatePlan(activePlan, currentState).valid,
     currentActions:
-      currentState.activePlan === null
+      activePlan === null
         ? []
-        : currentState.activePlan.actions.map((reference) => {
+        : activePlan.actions.map((reference) => {
             const action = currentState.planActions.find(
               (candidate) =>
                 candidate.id === reference.actionId &&
