@@ -21,6 +21,24 @@ Urban high-rise fire scenario (INC-2026-001) → agents generate an initial resp
 
 Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Gemini (`@google/genai`) · Supabase · Leaflet / react-leaflet · Recharts · Zod
 
+## Architecture
+
+```mermaid
+flowchart LR
+    Coord([Coordinator]) --> UI["Next.js command-center UI<br/>Leaflet maps · Recharts"]
+    UI --> Orch["Orchestrator"]
+    Orch --> Risk["Risk Assessment agent"]
+    Orch --> Res["Resource & Routing agent"]
+    Orch --> Plan["Response Planning agent"]
+    Risk --> Gemini["Gemini<br/>deterministic fallback"]
+    Res --> Gemini
+    Plan --> Gemini
+    Plan --> Approval["Human approval<br/>nothing executes without sign-off"]
+    Event["Simulated event<br/>e.g. Block Road A"] --> Orch
+    Orch --> Replan["Live replanning<br/>old plan vs new plan"]
+    Approval --> DB["Supabase<br/>plan lifecycle · optional"]
+```
+
 ## Project structure
 
 ```
